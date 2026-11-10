@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frontline 1944</title>
+<style>
+  :root { --amber:#f2c14e; --panel:rgba(16,20,16,.72); --line:rgba(242,193,78,.35); --ally:#5b93ff; --axis:#ff5a4d; --ink:#e9e6d8; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; overflow:hidden; background:#000; color:var(--ink); font-family:"Trebuchet MS","Segoe UI",sans-serif; user-select:none; }
+  #c { position:fixed; inset:0; width:100%; height:100%; display:block; cursor:crosshair; }
+  #ov { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; }
+  .hud { position:fixed; pointer-events:none; text-shadow:0 1px 2px #000; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:10px 12px; }
+  .lbl { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:#a9a58e; }
+  #tl { top:12px; left:12px; width:250px; }
+  #money { font-size:30px; font-weight:800; color:var(--amber); font-variant-numeric:tabular-nums; line-height:1; }
+  #income { font-size:12px; color:#b9d48a; margin-top:3px; }
+  #season { margin-top:10px; font-size:15px; font-weight:700; }
+  #seasonDesc { font-size:11px; color:#c9c5b0; }
+  .bar { height:5px; background:rgba(255,255,255,.14); border-radius:3px; overflow:hidden; margin-top:5px; }
+  .bar > i { display:block; height:100%; background:var(--amber); width:50%; }
+  #people { margin-top:10px; font-size:12px; line-height:1.55; display:grid; grid-template-columns:1fr auto; gap:0 10px; font-variant-numeric:tabular-nums; }
+  #people b { color:var(--amber); font-weight:700; text-align:right; }
+  #morale { margin-top:6px; font-size:11px; }
+  #bl { bottom:12px; left:12px; width:290px; }
+  #vname { font-size:18px; font-weight:800; letter-spacing:.03em; }
+  #hp > i { background:#6fcf5a; }
+  #vstat { font-size:12px; margin-top:6px; color:#d6d2bd; font-variant-numeric:tabular-nums; }
+  .wpn { display:flex; align-items:center; gap:8px; font-size:11px; margin-top:5px; }
+  .wpn span { width:92px; }
+  .wpn .bar { flex:1; margin:0; }
+  #tr { top:12px; right:12px; }
+  #mini { display:block; border:1px solid var(--line); border-radius:4px; background:#12303f; }
+  #feed { top:190px; right:12px; width:300px; font-size:12.5px; text-align:right; display:flex; flex-direction:column; gap:3px; }
+  #feed div { background:rgba(10,12,10,.55); padding:3px 8px; border-radius:3px; align-self:flex-end; transition:opacity .6s; }
+  #feed .good { color:#b9e08a; } #feed .bad { color:#ff9a8a; } #feed .gold { color:var(--amber); } #feed .crew { color:#9fc4e0; font-style:italic; }
+  #target { top:14px; left:50%; transform:translateX(-50%); min-width:240px; text-align:center; display:none; }
+  #tname { font-weight:800; font-size:15px; }
+  #thp > i { background:var(--axis); }
+  #keys { bottom:12px; right:12px; font-size:11px; color:#cfcab4; text-align:right; line-height:1.6; }
+  kbd { background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); border-radius:3px; padding:0 5px; font-family:inherit; font-size:10.5px; }
+  #banner { top:22%; left:50%; transform:translate(-50%,-50%); font-size:34px; font-weight:800; letter-spacing:.12em; text-transform:uppercase; opacity:0; transition:opacity .8s; text-align:center; }
+  #banner small { display:block; font-size:14px; letter-spacing:.06em; font-weight:400; text-transform:none; margin-top:4px; }
+  #wx { position:fixed; inset:0; pointer-events:none; opacity:0; transition:opacity 3s; }
+  #wx.rain { opacity:1; background:repeating-linear-gradient(100deg, rgba(190,210,230,0) 0 46px, rgba(190,210,230,.05) 46px 48px), radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(20,30,40,.45) 100%); }
+  #wx.snow { opacity:1; background:radial-gradient(ellipse at center, rgba(255,255,255,0) 60%, rgba(220,235,250,.35) 100%); }
+  #wx.fog { opacity:1; background:radial-gradient(ellipse at center, rgba(200,200,190,0) 40%, rgba(200,200,190,.3) 100%); }
+  #wx.heat { opacity:1; background:radial-gradient(ellipse at center, rgba(255,200,90,0) 60%, rgba(255,170,60,.14) 100%); }
+
+  .screen { position:fixed; inset:0; display:none; align-items:flex-start; justify-content:center; background:rgba(8,10,8,.78); z-index:10; padding:20px; overflow:auto; }
+  .screen.on { display:flex; }
+  .box { max-width:940px; width:100%; margin:auto; }
+  h1 { font-size:54px; margin:0; letter-spacing:.1em; text-transform:uppercase; color:var(--amber); line-height:1; }
+  h2 { margin:0 0 4px; font-size:26px; letter-spacing:.08em; text-transform:uppercase; color:var(--amber); }
+  .sub { color:#c9c5b0; margin:8px 0 18px; font-size:15px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(200px,1fr)); gap:12px; }
+  .card { background:rgba(30,36,28,.92); border:1px solid var(--line); border-radius:6px; padding:14px; cursor:pointer; text-align:left; color:var(--ink); font:inherit; display:flex; flex-direction:column; gap:5px; }
+  .card:hover:not(.no) { border-color:var(--amber); background:rgba(52,60,42,.95); }
+  .card.no { opacity:.45; cursor:not-allowed; }
+  .card.def { border-color:var(--amber); box-shadow:0 0 0 1px var(--amber) inset; }
+  .card .t { font-size:17px; font-weight:800; }
+  .card .k { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--amber); }
+  .card .d { font-size:12.5px; color:#cfcab4; flex:1; }
+  .card .s { font-size:11px; color:#a9a58e; font-variant-numeric:tabular-nums; }
+  .card .p { font-size:16px; font-weight:800; color:var(--amber); }
+  .row { display:flex; gap:6px; margin-top:4px; }
+  .btn { flex:1; background:var(--amber); color:#1a1a12; border:0; border-radius:4px; padding:7px 6px; font:inherit; font-weight:800; font-size:12px; cursor:pointer; }
+  .btn.alt { background:transparent; color:var(--amber); border:1px solid var(--amber); }
+  .btn:disabled { opacity:.4; cursor:not-allowed; }
+  .tabs { display:flex; gap:6px; margin:14px 0; flex-wrap:wrap; }
+  .tab { background:transparent; color:var(--ink); border:1px solid var(--line); border-radius:4px; padding:7px 16px; font:inherit; font-weight:700; cursor:pointer; letter-spacing:.06em; text-transform:uppercase; font-size:12px; }
+  .tab.on { background:var(--amber); color:#1a1a12; border-color:var(--amber); }
+  .help { margin-top:18px; font-size:12.5px; color:#cfcab4; line-height:1.9; }
+  .shophead { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; }
+  #shopMoney { font-size:24px; font-weight:800; color:var(--amber); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<canvas id="ov"></canvas>
+<div id="wx"></div>
+
+<div id="hud" style="display:none">
+  <div class="hud panel" id="tl">
+    <div class="lbl">War chest</div>
+    <div id="money">$0</div>
+    <div id="income"></div>
+    <div id="season"></div>
+    <div id="seasonDesc"></div>
+    <div class="bar"><i id="seasonBar"></i></div>
+    <div id="people"></div>
+    <div id="morale"></div>
+  </div>
+  <div class="hud panel" id="bl">
+    <div class="lbl" id="vdomain">Vehicle</div>
+    <div id="vname"></div>
+    <div class="bar" id="hp"><i></i></div>
+    <div id="vstat"></div>
+    <div class="wpn"><span id="w1n">Guns</span><div class="bar"><i id="w1"></i></div></div>
+    <div class="wpn" id="w2row"><span id="w2n">Bomb</span><div class="bar"><i id="w2"></i></div></div>
+  </div>
+  <div class="hud" id="tr"><canvas id="mini" width="230" height="168"></canvas></div>
+  <div class="hud" id="feed"></div>
+  <div class="hud panel" id="target"><div class="lbl" id="tkind"></div><div id="tname"></div><div class="bar" id="thp"><i></i></div><div class="lbl" id="tdist" style="margin-top:5px"></div></div>
+  <div class="hud" id="keys">
+    <kbd>Mouse</kbd> aim &nbsp; <kbd>LMB</kbd> fire &nbsp; <kbd>RMB</kbd> zoom on enemy<br>
+    <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive / throttle &nbsp; <kbd>Space</kbd> bombs · torpedo · rockets<br>
+    <kbd>Q</kbd><kbd>E</kbd> helicopter down / up &nbsp; <kbd>C</kbd> submarine dive / surface<br>
+    <kbd>B</kbd> buy vehicles &amp; buildings &nbsp; <kbd>Tab</kbd> switch vehicle
+  </div>
+  <div class="hud" id="banner"></div>
+</div>
+
+<div class="screen on" id="menu">
+  <div class="box">
+    <h1 id="menuTitle">Frontline 1944</h1>
+    <div class="sub" id="menuSub">Land, sea and air. Destroy the Axis headquarters before they destroy yours. Choose your first command:</div>
+    <div class="cards" id="starters"></div>
+    <div class="help">
+      <kbd>Mouse</kbd> aim &nbsp;·&nbsp; <kbd>Left click</kbd> fire &nbsp;·&nbsp; <kbd>Right click</kbd> zoom in on the nearest enemy &nbsp;·&nbsp; <kbd>W A S D</kbd> drive (planes: W/S throttle, they fly where you aim)<br>
+      <kbd>Space</kbd> secondary weapon &nbsp;·&nbsp; <kbd>B</kbd> shop: vehicles and buildings &nbsp;·&nbsp; <kbd>Tab</kbd> take over another Allied vehicle<br>
+      <kbd>Q</kbd> <kbd>E</kbd> helicopter down / up &nbsp;·&nbsp; <kbd>C</kbd> submarine dive / surface &nbsp;·&nbsp; Buy a vehicle once and it is yours for free from then on<br>
+      Houses and factories earn money. So do merchant ships, supply trucks, cargo planes and every enemy you destroy. Badly damaged ships may defect. Watch the seasons.
+    </div>
+  </div>
+</div>
+
+<div class="screen" id="shop">
+  <div class="box">
+    <div class="shophead"><h2>Quartermaster</h2><div id="shopMoney"></div></div>
+    <div class="sub" style="margin:2px 0 0">The battle is paused. <kbd>B</kbd> or <kbd>Esc</kbd> to return.</div>
+    <div class="tabs" id="tabs"></div>
+    <div class="cards" id="shopCards"></div>
+  </div>
+</div>
+
+<div class="screen" id="over">
+  <div class="box" style="text-align:center">
+    <h1 id="overTitle"></h1>
+    <div class="sub" id="overSub"></div>
+    <button class="btn" style="max-width:240px;font-size:15px;padding:12px" onclick="location.reload()">New campaign</button>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="js/defs.js"></script>
+<script src="js/models.js"></script>
+<script src="js/world.js"></script>
+<script src="js/game.js"></script>
+</body>
+</html>

@@ -1,0 +1,1176 @@
+'use strict';
+// ====================================================================
+//  Frontline 1944 - game logic
+// ====================================================================
+let scene, camera, renderer;
+const units = [], wrecks = [], projs = [], fxPool = [];
+let player = null, money = 600, state = 'menu', time = 0, uid = 0, lastIncome = 0, incomeT = INCOME_PERIOD;
+let camYaw = Math.PI / 2, camPitch = -0.12, fov = 60, zoomTarget = null, deadT = 0, raidT = 28, crewT = 6, hudT = 0;
+let focusMesh = null, focusDef = DEFS.spitfire;
+const aimDir = new THREE.Vector3(0, 0, 1), aimPoint = new THREE.Vector3();
+const input = { keys: {}, fire: false, zoom: false };
+const teamAI = [{ budget: 250, timer: 6 }, { budget: 250, timer: 4 }];
+const plots = [[], []];
+const stats = { kills: 0, defect: 0 };
+const unlocked = new Set(STARTERS);
+let lastBought = 'spitfire', deployCd = 0, nukeFlash = 0;
+const V = () => new THREE.Vector3();
+const T1 = V(), T2 = V(), T3 = V(), TA = V(), TB = V(), TC = V();
+const $ = id => document.getElementById(id);
+
+function fwd(yaw, pitch, out) { const c = Math.cos(pitch); return (out || V()).set(Math.sin(yaw) * c, Math.sin(pitch), Math.cos(yaw) * c); }
+function angDiff(a, b) { let d = (a - b) % (Math.PI * 2); if (d > Math.PI) d -= Math.PI * 2; if (d < -Math.PI) d += Math.PI * 2; return d; }
+function hdist(a, b) { return Math.hypot(a.x - b.x, a.z - b.z); }
+function ground(x, z) { return Math.max(terrainH(x, z), World.water); }
+
+// -------------------------------------------------------------- audio
+let actx = null, noiseBuf = null;
+function sfx(type, pos) {
+  if (!actx) return;
+  const d = pos ? pos.distanceTo(camera.position) : 0;
+  const vol = type === 'nuke' ? Math.max(0.5, clamp(1 - d / 4000, 0, 1)) : clamp(1 - d / 900, 0, 1); if (vol <= 0.02) return;
+  const src = actx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+  const f = actx.createBiquadFilter(), g = actx.createGain(), t = actx.currentTime;
+  const cfg = { gun: [1800, 0.05, 0.06], shell: [500, 0.25, 0.22], boom: [160, 0.9, 0.5], splash: [900, 0.4, 0.12], nuke: [90, 3.8, 0.95] }[type];
+  f.type = 'lowpass'; f.frequency.value = cfg[0];
+  g.gain.setValueAtTime(cfg[2] * vol, t); g.gain.exponentialRampToValueAtTime(0.001, t + cfg[1]);
+  src.connect(f); f.connect(g); g.connect(actx.destination); src.start(t, Math.random() * 0.5, cfg[1] + 0.05);
+}
+function initAudio() {
+  if (actx) return;
+  try {
+    actx = new (window.AudioContext || window.webkitAudioContext)();
+    noiseBuf = actx.createBuffer(1, actx.sampleRate, actx.sampleRate);
+    const ch = noiseBuf.getChannelData(0); for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+  } catch (e) { actx = null; }
+}
+
+// -------------------------------------------------------------- effects
+const FX_GEO = new THREE.SphereGeometry(1, 8, 6);
+function fx(pos, color, s0, s1, life, rise, op) {
+  let e = null;
+  for (const c of fxPool) if (!c.on) { e = c; break; }
+  if (!e) {
+    if (fxPool.length >= 320) return;
+    e = { mesh: new THREE.Mesh(FX_GEO, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false })), on: false };
+    fxPool.push(e); scene.add(e.mesh);
+  }
+  e.on = true; e.t = 0; e.life = life; e.s0 = s0; e.s1 = s1; e.rise = rise || 0; e.op = op === undefined ? 0.9 : op;
+  e.mesh.material.color.setHex(color); e.mesh.position.copy(pos); e.mesh.visible = true; e.mesh.scale.setScalar(s0);
+}
+function updateFx(dt) {
+  for (const e of fxPool) {
+    if (!e.on) continue;
+    e.t += dt; const k = e.t / e.life;
+    if (k >= 1) { e.on = false; e.mesh.visible = false; continue; }
+    e.mesh.scale.setScalar(e.s0 + (e.s1 - e.s0) * k); e.mesh.material.opacity = e.op * (1 - k); e.mesh.position.y += e.rise * dt;
+  }
+}
+function explode(pos, size) {
+  fx(pos, 0xffd060, size * 0.3, size, 0.35); fx(pos, 0xff6a10, size * 0.2, size * 0.75, 0.55);
+  fx(pos, 0x2e2e2e, size * 0.4, size * 1.5, 1.8, 7, 0.6);
+  sfx(size > 12 ? 'boom' : 'shell', pos);
+}
+function splashFx(pos, size) { TC.set(pos.x, World.water, pos.z); fx(TC, 0xffffff, size * 0.25, size, 0.7, 9, 0.75); sfx('splash', pos); }
+function smoke(pos, size, col) { fx(pos, col || 0x222222, size * 0.5, size * 2.2, 2.6, 7, 0.5); }
+
+// -------------------------------------------------------------- messages
+function msg(text, cls) {
+  const el = document.createElement('div'); el.textContent = text; if (cls) el.className = cls;
+  const f = $('feed'); f.prepend(el);
+  while (f.children.length > 7) f.lastChild.remove();
+  setTimeout(() => { el.style.opacity = 0; setTimeout(() => el.remove(), 700); }, 7000);
+}
+function banner(title, sub) {
+  const b = $('banner'); b.innerHTML = ''; b.append(title);
+  const s = document.createElement('small'); s.textContent = sub || ''; b.append(s);
+  b.style.opacity = 1; clearTimeout(banner.t); banner.t = setTimeout(() => b.style.opacity = 0, 4500);
+}
+
+// -------------------------------------------------------------- units
+function spawn(id, team, x, z, o) {
+  o = o || {}; const d = DEFS[id];
+  const u = {
+    id: ++uid, def: d, team, hp: d.hp, maxHp: d.hp, pos: V(), prev: V(), vel: V(), steer: V(),
+    yaw: o.yaw !== undefined ? o.yaw : (team === ALLY ? Math.PI / 2 : -Math.PI / 2), pitch: 0, roll: 0, speed: 0,
+    throttle: 0, turnIn: 0, throttleT: 1, aimYaw: 0, cdGun: rnd(0, 1), cdAlt: rnd(1, 4), cdAA: 0,
+    target: null, aaTarget: null, thinkT: rnd(0, 0.6), aaT: rnd(0, 0.5), breakT: 0, breakPt: V(), patrol: null,
+    bombQ: 0, bombT: 0, dead: false, built: o.build ? 0 : 1, fxT: rnd(0, 1), mesh: buildModel(d, team), people: [], raid: !!o.raid,
+    dive: 0, diveT: 0, cdDC: rnd(0, 2), takeoff: false, hv: V(), mine: false, cargo: null, chute: 0, chuteMesh: null
+  };
+  u.aimYaw = u.yaw;
+  if (d.domain === 'air') { u.pos.set(x, o.alt || 140, z); u.speed = d.speed; }
+  else if (d.domain === 'sea') u.pos.set(x, World.water, z);
+  else u.pos.set(x, terrainH(x, z), z);
+  fwd(u.yaw, 0, u.steer);
+  if (d.domain === 'bld' && d.model !== 'dock') addPeople(u);
+  scene.add(u.mesh); syncMesh(u, 1); units.push(u);
+  return u;
+}
+function addPeople(u) {
+  const d = u.def, n = Math.min(d.people, 6);
+  const cols = d.job === 'workers' ? [0x3b5b8a, 0x2f4a70] : d.job === 'gunners' ? [u.team === ALLY ? 0x5a6a3c : 0x6a6d60] : [0xb04a3a, 0x3a7a5a, 0xc9a23a, 0x6a4a8a, 0xdedede];
+  for (let i = 0; i < n; i++) {
+    const m = figure(cols[i % cols.length]); m.visible = false; scene.add(m);
+    u.people.push({ mesh: m, a: rnd(0, 6.28), r: d.job === 'gunners' ? rnd(2, 3.2) : d.radius + rnd(1.5, 7), sp: (d.job === 'gunners' ? 0.15 : rnd(0.12, 0.3)) * (Math.random() < 0.5 ? -1 : 1) });
+  }
+}
+function airportOf(team) { for (const u of units) if (u.def.model === 'airport' && u.team === team) return u; return null; }
+// aircraft start on the airport runway, ground units at the base, ships off the dock
+function spawnAt(id, team) {
+  const d = DEFS[id], b = BASE[team], s = team === ALLY ? 1 : -1, ap = AIRPORT[team];
+  if (d.domain === 'air') {
+    if (!airportOf(team)) return spawn(id, team, -s * (MAP.x + 80), ap.z + rnd(-200, 200), { alt: 160 + rnd(0, 40) });   // airfield lost: fly in from the rear
+    if (d.heli) { const x = ap.x + 62 + rnd(-6, 6), z = ap.z - 29 + rnd(-6, 6); return spawn(id, team, x, z, { alt: terrainH(x, z) + 2.3 }); }
+    const x = ap.x - s * 150, z = ap.z + rnd(-7, 7);
+    const u = spawn(id, team, x, z, { alt: terrainH(x, z) + (d.gear || 1.5) }); u.takeoff = true; u.speed = 0; return u;
+  }
+  if (d.domain === 'land') return spawn(id, team, b.x + s * rnd(150, 230), b.z + rnd(-130, 130));
+  const x = b.x + s * rnd(20, 240); return spawn(id, team, x, coastZ(x) + rnd(130, 300));
+}
+function despawn(u) {
+  u.dead = true; const i = units.indexOf(u); if (i >= 0) units.splice(i, 1);
+  scene.remove(u.mesh); for (const p of u.people) scene.remove(p.mesh);
+}
+// ---- reinforcements: ground forces arrive by military cargo plane (parachute) or by landing ship
+const CHUTE_GEO = new THREE.SphereGeometry(7, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2);
+const CHUTE_MAT = new THREE.MeshLambertMaterial({ color: 0xf2efe2, side: THREE.DoubleSide });
+function airlift(team, ids) {
+  const s = team === ALLY ? 1 : -1, b = BASE[team], z = b.z + rnd(-250, 250), x = b.x + s * rnd(250, 650);
+  const u = spawn(team === ALLY ? 'c54' : 'me323', team, -s * (MAP.x + 60), z, { alt: 190 });
+  u.cargo = ids; u.dropPt = V().set(x, terrainH(x, z) + 100, z); u.exitPt = V().set(-s * (MAP.x + 400), 230, z + rnd(-300, 300));
+  return u;
+}
+function paradrop(u) {
+  for (const id of u.cargo) {
+    const x = u.pos.x + rnd(-25, 25), z = u.pos.z + rnd(-25, 25), n = spawn(id, u.team, x, z);
+    n.chute = Math.max(5, u.pos.y - terrainH(x, z) - 6);
+    n.chuteMesh = new THREE.Mesh(CHUTE_GEO, CHUTE_MAT); n.chuteMesh.position.y = 9; n.chuteMesh.userData.chute = true; n.mesh.add(n.chuteMesh);
+    n.pos.y = terrainH(x, z) + n.chute; syncMesh(n, 1);
+    if (u.team === ALLY) msg(`${u.def.name} dropped reinforcements: ${n.def.name}`, 'good');
+  }
+  u.cargo = null;
+}
+function sealift(team, ids) {
+  const s = team === ALLY ? 1 : -1, x = BASE[team].x + s * rnd(250, 750);
+  const u = spawn(team === ALLY ? 'lst' : 'mfp', team, x, MAP.z - 110, { yaw: Math.PI });
+  u.cargo = ids; u.beachX = x; return u;
+}
+function unload(u) {
+  for (const id of u.cargo) { const x = u.pos.x + rnd(-30, 30); spawn(id, u.team, x, coastZ(x) - rnd(18, 45), { yaw: Math.PI }); }
+  if (u.team === ALLY) msg(`${u.def.name} landed ${u.cargo.length} units on the beach`, 'good');
+  u.cargo = null;
+}
+function requisition(id, team) {
+  const d = DEFS[id];
+  if (d.domain !== 'land' || d.role === 'cargo') return spawnAt(id, team);
+  if (Math.random() < 0.3 && !units.some(u => u.team === team && u.def.role === 'lander'))
+    return sealift(team, [id].concat(team === ALLY ? ['troops', 'jeep'] : ['grenadier', 'kubel']));
+  return airlift(team, [id]);
+}
+
+function syncMesh(u, dt) {
+  const m = u.mesh, d = u.def; m.position.copy(u.pos);
+  if (d.domain === 'bld') { m.rotation.y = u.yaw; m.scale.y = Math.max(0.04, u.built); }
+  else m.rotation.set(-u.pitch, u.yaw, u.roll, 'YXZ');
+  const ts = m.userData.turrets;
+  if (ts) { const want = u.aimYaw - u.yaw; for (const t of ts) t.rotation.y += angDiff(want, t.rotation.y) * Math.min(1, dt * 5); }
+  if (m.userData.rotor) m.userData.rotor.rotation.y += dt * 24;
+  const sl = m.userData.soldiers;
+  if (sl) {
+    const alive = Math.ceil(u.hp / u.maxHp * sl.length), mv = Math.abs(u.speed) > 1;
+    for (let i = 0; i < sl.length; i++) { sl[i].visible = i < alive; sl[i].position.y = mv ? Math.abs(Math.sin(time * 9 + sl[i].userData.ph)) * 0.25 : 0; }
+  }
+}
+
+// -------------------------------------------------------------- movement
+function moveAir(u, dt) {
+  const d = u.def, dir = u.steer;
+  if (u.takeoff) {                     // roll down the runway, then climb out
+    u.speed = Math.min(d.speed, u.speed + d.speed * 0.3 * dt); u.roll = 0;
+    const lift = u.speed > d.speed * 0.6;
+    u.pitch = lift ? Math.min(0.28, u.pitch + 0.35 * dt) : 0;
+    fwd(u.yaw, u.pitch, T3); u.pos.addScaledVector(T3, u.speed * dt);
+    const gy = terrainH(u.pos.x, u.pos.z) + (d.gear || 1.5);
+    if (!lift || u.pos.y < gy) u.pos.y = gy;
+    if (u.pos.y > gy + 28) { u.takeoff = false; fwd(u.yaw, 0.15, u.steer); }
+    return;
+  }
+  if (Math.abs(u.pos.x) > MAP.x + 200 || Math.abs(u.pos.z) > MAP.z + 200) { dir.set(-u.pos.x, 60 - u.pos.y * 0.2, -u.pos.z).normalize(); }
+  if (u.pos.y > 520 && dir.y > 0) { dir.y = 0; dir.normalize(); }
+  const wy = Math.atan2(dir.x, dir.z), wp = Math.asin(clamp(dir.y, -1, 1));
+  const dy = angDiff(wy, u.yaw), mt = d.turn * dt;
+  u.yaw += clamp(dy, -mt, mt);
+  u.pitch = clamp(u.pitch + clamp(wp - u.pitch, -mt * 0.8, mt * 0.8), -1.2, 1.2);
+  u.roll += (clamp(-dy * 1.6, -1.25, 1.25) - u.roll) * Math.min(1, dt * 4);
+  u.speed += (d.speed * u.throttleT - u.speed) * Math.min(1, dt * 0.8);
+  fwd(u.yaw, u.pitch, T3); u.pos.addScaledVector(T3, u.speed * dt);
+  if (u.pos.y < ground(u.pos.x, u.pos.z) + 1.2) { if (u === player) msg('You flew into the ' + (terrainH(u.pos.x, u.pos.z) > World.water ? 'ground' : 'sea') + '.', 'bad'); kill(u, null, false); }
+}
+function moveHeli(u, dt) {
+  const d = u.def, k = Math.min(1, dt * 1.6);
+  u.vel.x += (u.hv.x - u.vel.x) * k; u.vel.z += (u.hv.z - u.vel.z) * k; u.vel.y += (u.hv.y - u.vel.y) * Math.min(1, dt * 2.2);
+  u.pos.addScaledVector(u.vel, dt);
+  u.pos.x = clamp(u.pos.x, -MAP.x - 100, MAP.x + 100); u.pos.z = clamp(u.pos.z, -MAP.z - 100, MAP.z + 100);
+  const g = ground(u.pos.x, u.pos.z) + 2.2;
+  if (u.pos.y < g) u.pos.y = g; if (u.pos.y > 420) u.pos.y = 420;
+  u.yaw += clamp(angDiff(u.aimYaw, u.yaw), -d.turn * dt, d.turn * dt);
+  const sy = Math.sin(u.yaw), cy = Math.cos(u.yaw), f = u.vel.x * sy + u.vel.z * cy, l = u.vel.x * cy - u.vel.z * sy;
+  u.pitch += (-f / d.speed * 0.32 - u.pitch) * Math.min(1, dt * 3);
+  u.roll += (-l / d.speed * 0.32 - u.roll) * Math.min(1, dt * 3);
+  u.speed = Math.hypot(u.vel.x, u.vel.z);
+}
+function moveLand(u, dt) {
+  const d = u.def;
+  if (u.chute > 0) {                   // still under the parachute
+    u.chute = Math.max(0, u.chute - 26 * dt); u.pos.y = terrainH(u.pos.x, u.pos.z) + u.chute; u.speed = 0;
+    if (u.chute <= 0 && u.chuteMesh) { u.mesh.remove(u.chuteMesh); u.chuteMesh = null; }
+    return;
+  }
+  u.yaw += u.turnIn * d.turn * dt;
+  const here = terrainH(u.pos.x, u.pos.z), wet = here < World.water;
+  const want = u.throttle * d.speed * (u.throttle < 0 ? 0.5 : 1) * (wet ? 0.45 : 1);
+  u.speed += (want - u.speed) * Math.min(1, dt * 3);
+  const nx = clamp(u.pos.x + Math.sin(u.yaw) * u.speed * dt, -MAP.x, MAP.x), nz = clamp(u.pos.z + Math.cos(u.yaw) * u.speed * dt, -MAP.z, MAP.z);
+  const nh = terrainH(nx, nz);
+  if (nh < World.water - 1.3 && nh < here) u.speed = 0;
+  else { u.pos.x = nx; u.pos.z = nz; }
+  u.pos.y = terrainH(u.pos.x, u.pos.z);
+  if (d.model !== 'squad') {
+    const s = Math.sin(u.yaw) * 3, c = Math.cos(u.yaw) * 3;
+    u.pitch = Math.atan2(terrainH(u.pos.x + s, u.pos.z + c) - terrainH(u.pos.x - s, u.pos.z - c), 6);
+  }
+}
+function moveSea(u, dt) {
+  const d = u.def;
+  if (d.sub) u.dive = clamp(u.dive + (u.diveT > 0.5 ? dt : -dt) * 0.45, 0, 1);
+  const top = d.speed * (d.sub ? 1 - 0.35 * u.dive : 1);
+  u.speed += (u.throttle * top * (u.throttle < 0 ? 0.4 : 1) - u.speed) * Math.min(1, dt * 0.6);
+  u.yaw += u.turnIn * d.turn * dt * clamp(Math.abs(u.speed) / (d.speed * 0.4), 0.25, 1);
+  const here = terrainH(u.pos.x, u.pos.z);
+  const nx = clamp(u.pos.x + Math.sin(u.yaw) * u.speed * dt, -MAP.x, MAP.x), nz = clamp(u.pos.z + Math.cos(u.yaw) * u.speed * dt, -MAP.z, MAP.z);
+  const nh = terrainH(nx, nz);
+  if (nh > World.water - 2.6 && nh > here) { u.speed *= 0.5; if (!u.aground) { u.aground = true; if (u === player) msg('Shallows! You are running aground.', 'bad'); } }
+  else { u.pos.x = nx; u.pos.z = nz; u.aground = false; }
+  u.pos.y = World.water - (d.sub ? u.dive * d.diveDepth : 0);
+  u.roll = Math.sin(time * 0.9 + u.id) * 0.025 - u.turnIn * 0.04 * (u.speed / d.speed);
+  u.pitch = Math.sin(time * 0.7 + u.id * 2) * 0.012;
+}
+
+// -------------------------------------------------------------- weapons
+const PGEO = {
+  bullet: new THREE.BoxGeometry(0.18, 0.18, 3.2), shell: new THREE.SphereGeometry(0.6, 6, 5),
+  bomb: new THREE.CylinderGeometry(0.45, 0.3, 2.2, 6).rotateX(Math.PI / 2), nuke: new THREE.CylinderGeometry(1.5, 0.9, 6, 8).rotateX(Math.PI / 2), torpedo: new THREE.CylinderGeometry(0.45, 0.45, 5, 6).rotateX(Math.PI / 2)
+};
+const PMAT = {
+  bullet: new THREE.MeshBasicMaterial({ color: 0xffe27a }), shell: new THREE.MeshBasicMaterial({ color: 0xff9a3a }),
+  bomb: new THREE.MeshLambertMaterial({ color: 0x2a2d28 }), nuke: new THREE.MeshLambertMaterial({ color: 0xd8c23a }), torpedo: new THREE.MeshLambertMaterial({ color: 0x30343a })
+};
+function addProj(kind, o, vel, owner, dmg, splash, life) {
+  const m = new THREE.Mesh(PGEO[kind], PMAT[kind]); m.position.copy(o); scene.add(m);
+  projs.push({ kind, pos: o.clone(), prev: o.clone(), vel, team: owner.team, owner, pl: owner === player, dmg, splash, life, mesh: m, wake: 0, swim: false });
+}
+function shoot(u, w, aim, xs) {
+  const d = u.def, o = T2;
+  const nose = d.domain === 'air' && !d.heli;
+  if (nose) { fwd(u.yaw, u.pitch, T3); o.copy(u.pos).addScaledVector(T3, d.radius); }
+  else {
+    const y = Math.atan2(aim.x - u.pos.x, aim.z - u.pos.z), k = d.len ? d.beam * 0.7 : 2.6;
+    o.set(u.pos.x + Math.sin(y) * k, u.pos.y + (d.heli ? -0.9 : (d.centerY || 1) + (d.len ? d.beam * 0.6 : 0.8)), u.pos.z + Math.cos(y) * k);
+  }
+  const dir = V().subVectors(aim, o).normalize();
+  if (nose && dir.dot(T3) < 0.93) dir.copy(T3);
+  const sp = (w.spread || 0.004) + xs; dir.x += rnd(-sp, sp); dir.y += rnd(-sp, sp); dir.z += rnd(-sp, sp); dir.normalize();
+  addProj(w.kind, o, dir.multiplyScalar(w.vel), u, w.dmg, w.splash || 0, w.range / w.vel);
+  sfx(w.kind === 'bullet' ? 'gun' : 'shell', u.pos);
+  if (w.kind === 'shell') fx(o, 0xffd9a0, 0.8, 3.2, 0.15);
+}
+function fireGun(u, aim, xs) {
+  const g = u.def.gun; if (!g || u.cdGun > 0 || (u.def.sub && u.dive > 0.3)) return;
+  u.cdGun = g.rate * World.reload * (u === player ? 1 : 1.6);
+  shoot(u, g, aim, xs || 0);
+}
+function fireAlt(u, aim) {
+  const a = u.def.alt; if (!a || u.cdAlt > 0) return false;
+  u.cdAlt = a.cd * World.reload;
+  if (a.kind === 'bomb' || a.kind === 'nuke') { u.bombQ = a.count; u.bombT = 0; }
+  else if (a.kind === 'torpedo') {
+    let yaw, ox, oz, oy;
+    if (u.def.domain === 'air') { yaw = u.yaw; ox = u.pos.x; oz = u.pos.z; oy = u.pos.y - 2; }
+    else { yaw = Math.atan2(aim.x - u.pos.x, aim.z - u.pos.z); ox = u.pos.x + Math.sin(yaw) * (u.def.len * 0.5 + 4); oz = u.pos.z + Math.cos(yaw) * (u.def.len * 0.5 + 4); oy = World.water + 1; }
+    addProj('torpedo', T2.set(ox, oy, oz), V().set(Math.sin(yaw) * 58, 0, Math.cos(yaw) * 58), u, a.dmg, a.splash, 14);
+    sfx('splash', u.pos);
+  } else shoot(u, a, aim, 0);
+  return true;
+}
+function centerOf(u, out) { return out.copy(u.pos).setY(u.pos.y + (u.def.centerY || 0)); }
+// distance from point to a unit's body (0 when inside)
+function distToUnit(u, p) {
+  const d = u.def; centerOf(u, TC);
+  if (d.len) {
+    const fx_ = Math.sin(u.yaw), fz = Math.cos(u.yaw);
+    const s = clamp((p.x - TC.x) * fx_ + (p.z - TC.z) * fz, -d.len / 2, d.len / 2);
+    TC.x += fx_ * s; TC.z += fz * s;
+    const dy = p.y - TC.y; // tall superstructure: forgive height
+    return Math.max(0, Math.hypot(p.x - TC.x, p.z - TC.z, dy > 0 ? dy * 0.5 : dy) - d.radius);
+  }
+  return Math.max(0, p.distanceTo(TC) - d.radius * (d.domain === 'air' ? 1.15 : 1));
+}
+function hitTest(u, p) {
+  const reach = (u.def.len ? u.def.len * 0.5 : u.def.radius) + 30;
+  if (Math.abs(p.pos.x - u.pos.x) > reach || Math.abs(p.pos.z - u.pos.z) > reach) return false;
+  if (distToUnit(u, p.pos) <= 0) return true;
+  T3.lerpVectors(p.prev, p.pos, 0.5); if (distToUnit(u, T3) <= 0) return true;
+  return distToUnit(u, p.prev) <= 0;
+}
+function updateProjs(dt) {
+  for (let i = projs.length - 1; i >= 0; i--) {
+    const p = projs[i]; p.prev.copy(p.pos); p.life -= dt;
+    if (p.kind === 'bomb' || p.kind === 'nuke' || (p.kind === 'torpedo' && !p.swim)) p.vel.y -= 40 * dt;
+    p.pos.addScaledVector(p.vel, dt);
+    const th = terrainH(p.pos.x, p.pos.z);
+    let done = false, hit = null;
+    if (p.kind === 'torpedo') {
+      if (!p.swim && p.pos.y <= World.water - 0.3) { if (th > World.water - 0.8) done = true; else { p.swim = true; p.vel.y = 0; splashFx(p.pos, 5); } }
+      if (p.swim) {
+        p.pos.y = World.water - 0.3; if (th > World.water - 0.8) done = true;
+        p.wake -= dt; if (p.wake <= 0) { p.wake = 0.12; TC.copy(p.pos).setY(World.water + 0.1); fx(TC, 0xffffff, 0.8, 2.4, 1.6, 0, 0.5); }
+      }
+    } else if (p.pos.y <= Math.max(th, World.water)) { done = true; p.pos.y = Math.max(th, World.water); }
+    if (!done) for (const u of units) {
+      if (u.team === p.team || u.dead) continue;
+      if (p.kind === 'torpedo' && (u.def.domain !== 'sea' || !p.swim)) continue;
+      if (u.def.sub && u.dive > 0.5 && p.kind !== 'torpedo') continue;   // submerged: only torpedoes and blast reach it
+      if (hitTest(u, p)) { hit = u; break; }
+    }
+    if (hit || done || p.life <= 0) {
+      if (hit || done) impact(p, hit, th);
+      scene.remove(p.mesh); projs.splice(i, 1); continue;
+    }
+    p.mesh.position.copy(p.pos); T3.copy(p.pos).add(p.vel); p.mesh.lookAt(T3);
+  }
+}
+function nukeBlast(p) {
+  const pos = p.pos.clone(), R = p.splash;
+  nukeFlash = 1.8; sfx('nuke', pos);
+  fx(pos, 0xffffff, 30, R * 0.9, 1.3, 0, 1); fx(pos, 0xffe08a, 20, R * 0.6, 2.4, 6, 0.95); fx(pos, 0xff7a20, 15, R * 0.42, 3.8, 10, 0.9);
+  for (let i = 0; i < 9; i++) { TC.copy(pos); TC.y += i * 22; fx(TC, i > 6 ? 0x6a5a50 : 0x4a4038, 14, i > 6 ? 110 : 38, 9 + i * 0.6, 16, 0.75); }
+  for (let i = 0; i < 16; i++) { const a = i / 16 * 6.283; TC.set(pos.x + Math.sin(a) * R * 0.55, pos.y + 4, pos.z + Math.cos(a) * R * 0.55); fx(TC, 0xd8d0c0, 10, 48, 3.2, 3, 0.5); }
+  for (const u of units.slice()) {
+    if (u.team === p.team || u.dead) continue;
+    const dd = distToUnit(u, pos);
+    if (dd < R) damage(u, p.dmg * (1 - dd / R) * (u.def.model === 'hq' ? 0.35 : 1), p.owner, p.pl);
+  }
+  msg(p.team === ALLY ? 'ATOMIC BOMB DETONATED. Everything beneath it is gone.' : 'The Axis have dropped an atomic bomb!', p.team === ALLY ? 'gold' : 'bad');
+}
+function impact(p, hit, th) {
+  if (p.kind === 'nuke') { nukeBlast(p); return; }
+  const pos = p.pos.clone(), wet = th < World.water;
+  if (hit) damage(hit, p.dmg * (p.kind === 'bullet' && hit.def.armor ? 0.2 : 1), p.owner, p.pl);
+  if (p.splash) {
+    explode(pos, p.splash * 0.8);
+    if (wet || p.kind === 'torpedo') splashFx(pos, p.splash * 0.9);
+    for (const u of units.slice()) {
+      if (u.team === p.team || u === hit || u.dead) continue;
+      if (p.kind === 'torpedo' && u.def.domain !== 'sea') continue;
+      if (u.def.sub && u.dive > 0.5 && p.kind === 'shell') continue;
+      const dd = distToUnit(u, pos);
+      if (dd < p.splash) damage(u, p.dmg * 0.6 * (1 - dd / p.splash) * (u.def.domain === 'air' ? 0.3 : 1), p.owner, p.pl);
+    }
+  } else if (hit) fx(pos, 0xffe9a0, 0.5, 1.8, 0.14);
+  else if (wet) { TC.copy(pos); fx(TC, 0xffffff, 0.4, 1.6, 0.35, 4, 0.6); }
+  else fx(pos, 0x8a7a5a, 0.4, 1.5, 0.3, 2, 0.5);
+}
+
+// -------------------------------------------------------------- damage, defection, death
+function bountyOf(d) { return d.model === 'hq' ? 2000 : Math.round(Math.max(40, (d.aiCost || d.cost || 300) * 0.3) / 5) * 5; }
+function damage(u, amt, att, pl) {
+  if (u.dead) return;
+  if (!pl) amt *= 0.45;            // AI gunnery is weaker than the player's: keeps the war from burning out
+  u.hp -= amt;
+  if (u === player) hurtFlash = 0.25;
+  if (u.def.domain === 'sea' && u !== player && !u.rolled && u.hp < u.maxHp * 0.25) {
+    u.rolled = true;
+    if (Math.random() < 0.38) { defect(u, pl); return; }
+  }
+  if (u.hp <= 0) kill(u, att, pl);
+}
+let hurtFlash = 0;
+function defect(u, pl) {
+  const old = u.team; u.team = 1 - old;
+  u.hp = Math.max(u.hp, u.maxHp * 0.4); u.target = null; u.aaTarget = null; u.route = null; u.patrol = null;
+  u.mesh.userData.teamMat.color.setHex(TEAM_COL[u.team]);
+  TC.copy(u.pos).setY(u.pos.y + 14); fx(TC, 0xffffff, 3, 16, 1.2, 4, 0.7);
+  if (u.team === ALLY) {
+    stats.defect++;
+    const bonus = pl ? bountyOf(u.def) : 0; money += bonus;
+    msg(`${u.def.name} strikes her colours and DEFECTS to the Allies!${bonus ? ' +$' + bonus : ''}`, 'gold');
+  } else msg(`Mutiny! ${u.def.name} has defected to the Axis!`, 'bad');
+}
+const WRECK_MAT = [0x1d1b19, 0x2e2a26, 0x3a2a20].map(c => new THREE.MeshLambertMaterial({ color: c }));
+function makeWreck(u) {
+  const m = u.mesh, d = u.def; let i = 0;
+  m.traverse(o => {
+    if (!o.isMesh) return;
+    if (o.userData.person || o.userData.chute || o.material === PROP) { o.visible = false; return; }
+    o.material = WRECK_MAT[(i++) % 3];
+  });
+  const w = { mesh: m, def: d, t: 0, k: 0, smokeFor: rnd(25, 45), smokeT: 0, vel: u.vel.clone(), state: 'burn', spin: rnd(-2.5, 2.5), yaw: u.yaw, pitch: u.pitch, roll: u.roll, tRoll: rnd(0.25, 0.6) * (Math.random() < 0.5 ? -1 : 1), baseY: u.pos.y };
+  if (d.domain === 'air') w.state = 'fall';
+  else if (d.domain === 'sea') w.state = 'sink';
+  else if (d.domain === 'bld') { m.scale.y = 0.28; m.rotation.z = rnd(-0.06, 0.06); }
+  else if (m.userData.soldiers) for (const s of m.userData.soldiers) { s.visible = true; s.rotation.x = Math.PI / 2 * (Math.random() < 0.5 ? 1 : -1); s.rotation.y = rnd(0, 6); s.position.y = 0.3; }
+  else { m.rotation.z = rnd(-0.18, 0.18); if (m.userData.turrets) m.userData.turrets[0].rotation.set(rnd(-0.15, 0.1), rnd(0, 6), rnd(-0.2, 0.2)); }
+  if (u.chute > 0) w.state = 'fall';
+  wrecks.push(w);
+  if (wrecks.length > 240) scene.remove(wrecks.shift().mesh);
+  return w;
+}
+function updateWrecks(dt) {
+  for (const w of wrecks) {
+    w.t += dt; const m = w.mesh;
+    if (w.state === 'fall') {
+      w.vel.y -= 32 * dt; w.vel.x *= 1 - 0.25 * dt; w.vel.z *= 1 - 0.25 * dt;
+      m.position.addScaledVector(w.vel, dt); w.roll += w.spin * dt; w.pitch = Math.max(-1.1, w.pitch - 0.5 * dt);
+      m.rotation.set(-w.pitch, w.yaw, w.roll, 'YXZ');
+      w.smokeT -= dt; if (w.smokeT <= 0) { w.smokeT = 0.06; fx(m.position, 0x1c1c1c, 1.5, 5, 1.6, 2, 0.6); if (Math.random() < 0.4) fx(m.position, 0xff7a20, 1, 2.5, 0.3); }
+      const th = terrainH(m.position.x, m.position.z);
+      if (m.position.y <= Math.max(th, World.water) + 1) {
+        explode(m.position, w.def.radius * 2.5);
+        if (th >= World.water) { m.position.y = th + 0.7; m.rotation.set(rnd(-0.25, 0.1), w.yaw, rnd(-0.5, 0.5), 'YXZ'); w.state = 'burn'; }
+        else { splashFx(m.position, w.def.radius * 2); m.position.y = World.water; w.baseY = World.water; w.state = 'sink'; w.t = 0; }
+      }
+      continue;
+    }
+    if (w.state === 'sink') {
+      w.k = Math.min(1, w.k + dt / 12);
+      const air = w.def.domain === 'air';
+      const depth = air ? w.def.radius * 0.25 : w.def.beam * 0.42;
+      m.position.y = w.baseY - depth * w.k;
+      if (air) m.rotation.set(0.5 * w.k, w.yaw, w.roll * (1 - w.k) + 0.3 * w.k, 'YXZ');
+      else m.rotation.set(0.1 * w.k, w.yaw, w.tRoll * w.k, 'YXZ');
+      if (w.k >= 1) w.state = 'burn';
+    }
+    if (w.t < w.smokeFor) {
+      w.smokeT -= dt;
+      if (w.smokeT <= 0) {
+        w.smokeT = 0.35;
+        if (m.position.distanceToSquared(camera.position) < 1400 * 1400) { TC.copy(m.position); TC.y += (w.def.centerY || 1) + 2; smoke(TC, w.def.len ? 5 : 2.5); }
+      }
+    }
+  }
+}
+function kill(u, att, pl) {
+  if (u.dead) return;
+  u.dead = true; const i = units.indexOf(u); if (i >= 0) units.splice(i, 1);
+  const d = u.def;
+  explode(centerOf(u, TA), d.len ? d.len * 0.45 : d.radius * 2.4);
+  for (const p of u.people) scene.remove(p.mesh);
+  const b = bountyOf(d);
+  if (u.team === AXIS) {
+    if (pl) { money += b; stats.kills++; msg(`Destroyed ${d.name}  +$${b}`, 'gold'); }
+    else teamAI[ALLY].budget += b * 0.5;
+  } else {
+    teamAI[AXIS].budget += b * 0.5;
+    if (d.domain === 'bld') msg(`We lost a ${d.name}!`, 'bad');
+  }
+  const w = makeWreck(u);
+  if (d.domain === 'bld') { const pl_ = plots[u.team].find(p => p.unit === u); if (pl_) { pl_.unit = null; pl_.rubble = w; } }
+  if (u === player) playerDied(w);
+  if (d.model === 'hq') endGame(u.team === AXIS);
+}
+
+// -------------------------------------------------------------- AI
+function weight(d, e) {
+  const ed = e.def.domain;
+  switch (d.role) {
+    case 'fighter': return ed === 'air' ? 3 : ed === 'land' ? (e.def.armor ? 0.5 : 1.2) : ed === 'sea' ? 0.25 : 0.15;
+    case 'bomber': return ed === 'bld' ? 3 : ed === 'sea' ? 2 : ed === 'land' ? 1 : 0;
+    case 'torpedo': return ed === 'sea' ? 1 : 0;
+    case 'aa': return ed === 'air' ? 3 : ed === 'land' ? 1 : ed === 'bld' ? 0.6 : 0;
+    case 'infantry': case 'tank': return ed === 'land' ? 2 : ed === 'bld' ? 1.5 : ed === 'sea' ? 0.4 : 0;
+    case 'warship': return ed === 'sea' ? 2 : ed === 'land' ? 1 : ed === 'bld' ? 1 : 0;
+    case 'heli': return ed === 'land' ? 2.5 : ed === 'bld' ? 1 : ed === 'sea' ? 0.8 : 0.4;
+    case 'sub': return ed === 'sea' ? 2 : 0;
+  }
+  return 0;
+}
+function pickTarget(u) {
+  const d = u.def; if (!d.gun && !d.alt) { u.target = null; return; }
+  const far = d.role === 'bomber' || d.role === 'torpedo';
+  const sight = far ? 99999 : (d.domain === 'air' ? 1300 : d.domain === 'sea' ? 950 : Math.max(520, d.gun ? d.gun.range : 0)) * World.vis;
+  let best = null, bs = 1e9;
+  for (const e of units) {
+    if (e.team === u.team) continue;
+    let w = weight(d, e); if (w <= 0) continue;
+    const dist = u.pos.distanceTo(e.pos); if (dist > sight) continue;
+    if (e.def.sub && e.dive > 0.5 && (!(d.asw || d.sub || d.role === 'torpedo') || dist > 450)) continue;   // only sonar finds a dived sub
+    if (d.sub && NONCOMBAT[e.def.role]) w *= 2;
+    const ed = e.def.domain;
+    if (d.domain === 'land' && ed === 'sea' && dist > d.gun.range) continue;
+    if (d.domain === 'sea' && (ed === 'land' || ed === 'bld') && dist > d.gun.range + 120) continue;
+    const s = dist / w; if (s < bs) { bs = s; best = e; }
+  }
+  u.target = best;
+}
+function pickAA(u) {
+  const r = u.def.aa.range * Math.max(World.vis, 0.5); let best = null, bd = r;
+  for (const e of units) { if (e.team === u.team || e.def.domain !== 'air') continue; const dd = u.pos.distanceTo(e.pos); if (dd < bd) { bd = dd; best = e; } }
+  u.aaTarget = best;
+}
+function autoAA(u, dt) {
+  u.aaT -= dt; if (u.aaT <= 0) { u.aaT = 0.5; pickAA(u); }
+  const t = u.aaTarget; if (!t || t.dead || t.team === u.team) { u.aaTarget = null; return; }
+  const a = u.def.aa, dist = u.pos.distanceTo(t.pos);
+  if (u.def.domain === 'bld') u.aimYaw = Math.atan2(t.pos.x - u.pos.x, t.pos.z - u.pos.z);
+  if (u.cdAA > 0 || dist > a.range) return;
+  u.cdAA = a.rate * World.reload;
+  const o = TB.copy(u.pos); o.y += (u.def.centerY || 2) + (u.def.len ? u.def.beam * 0.7 : 2);
+  if (u.def.domain === 'air') o.y = u.pos.y + 2;
+  const vel = 620, tt = dist / vel;
+  const dir = V().copy(t.pos).addScaledVector(t.vel, tt).sub(o).normalize();
+  const sp = 0.035; dir.x += rnd(-sp, sp); dir.y += rnd(-sp, sp); dir.z += rnd(-sp, sp); dir.normalize();
+  addProj('bullet', o, dir.multiplyScalar(vel), u, a.dmg, 0, a.range * 1.2 / vel);
+  if (Math.random() < 0.3) sfx('gun', u.pos);
+}
+function setBreak(u, t, dist, alt, jink) {
+  u.breakT = t; const y = u.yaw + (jink ? rnd(-1.1, 1.1) : rnd(-0.3, 0.3));
+  u.breakPt.set(u.pos.x + Math.sin(y) * dist, alt, u.pos.z + Math.cos(y) * dist);
+}
+function patrolPoint(u) {
+  const d = u.def, s = u.team === ALLY ? 1 : -1;
+  if (d.role === 'torpedo') return V().set(rnd(-MAP.x * 0.6, MAP.x * 0.6), 100, rnd(250, MAP.z * 0.8));
+  if (d.role === 'bomber') return V().set(BASE[u.team].x + rnd(-300, 300), 190, BASE[u.team].z + rnd(-250, 300));
+  return V().set(rnd(-MAP.x * 0.45, MAP.x * 0.45) + s * 200, rnd(110, 200), rnd(-MAP.z * 0.7, MAP.z * 0.45));
+}
+function aiAir(u, dt) {
+  const d = u.def, t = u.target, g = T1, gr = ground(u.pos.x, u.pos.z);
+  if (d.role === 'cargo') {            // supply run: airport <-> far rear depot
+    if (!u.route) {
+      const ap = AIRPORT[u.team], s = u.team === ALLY ? 1 : -1;
+      u.route = { i: 1, loaded: false, pts: [V().set(ap.x, 80, ap.z), V().set(-s * (MAP.x - 150), 210, MAP.z - rnd(150, 400))] };
+    }
+    const r = u.route, p = r.pts[r.i]; g.copy(p);
+    if (hdist(u.pos, p) < 90) { if (r.i === 0 && r.loaded) { deliver(u); r.loaded = false; } if (r.i === 1) r.loaded = true; r.i = 1 - r.i; }
+  } else if (d.role === 'airlift') {
+    if (u.cargo) { g.copy(u.dropPt); if (hdist(u.pos, u.dropPt) < 70) paradrop(u); }
+    else { g.copy(u.exitPt); if (Math.abs(u.pos.x) > MAP.x + 110) { despawn(u); return; } }
+  }
+  else if (u.breakT > 0) { u.breakT -= dt; g.copy(u.breakPt); }
+  else if (!t || (d.role === 'torpedo' && u.cdAlt > 0)) {
+    if (!u.patrol || hdist(u.pos, u.patrol) < 160) u.patrol = patrolPoint(u);
+    g.copy(u.patrol);
+  } else {
+    const hd = hdist(u.pos, t.pos), al = Math.abs(angDiff(Math.atan2(t.pos.x - u.pos.x, t.pos.z - u.pos.z), u.yaw));
+    if (d.role === 'bomber') {
+      const alt = Math.max(gr, t.pos.y) + (d.model === 'b52' ? 240 : 170);
+      g.set(t.pos.x, alt, t.pos.z);
+      const tf = Math.sqrt(Math.max(0, 2 * (u.pos.y - t.pos.y) / 40)), lead = u.speed * tf;
+      if (u.cdAlt <= 0 && al < 0.25 && hd < lead + d.alt.count * 5 && hd > lead - 30) fireAlt(u, t.pos);
+      if (hd < 40 || (hd < 260 && al > 1)) setBreak(u, 8, 1000, alt);
+    } else if (d.role === 'torpedo') {
+      g.set(t.pos.x, World.water + (hd > 650 ? 90 : 20), t.pos.z);
+      if (hd < 340 && al < 0.15 && u.pos.y < World.water + 60) { fireAlt(u, t.pos); setBreak(u, 5, 800, World.water + 120, true); }
+      else if (hd < 200) setBreak(u, 6, 900, World.water + 110);
+    } else {
+      const dist = u.pos.distanceTo(t.pos), air = t.def.domain === 'air';
+      g.copy(t.pos).addScaledVector(t.vel, dist / d.gun.vel); g.y += t.def.centerY || 0;
+      T2.subVectors(g, u.pos).normalize(); fwd(u.yaw, u.pitch, TA);
+      const dot = T2.dot(TA);
+      if (dist < d.gun.range && dot > 0.995) fireGun(u, g, 0.02);
+      if (dist < (air ? 50 : 150) || (!air && dist < 260 && dot < 0.4)) setBreak(u, air ? 1.6 : 4.5, 550, gr + 150, true);
+    }
+  }
+  u.steer.subVectors(g, u.pos).normalize();
+  if (u.pos.y - gr < 40) { u.steer.y = Math.max(u.steer.y, 0.5); u.steer.normalize(); }
+}
+function aiHeli(u, dt) {
+  const d = u.def, t = u.target; let gx, gz, gy;
+  if (t) {
+    const a = Math.atan2(u.pos.x - t.pos.x, u.pos.z - t.pos.z) + 0.3 * (u.id % 2 ? 1 : -1);   // hold a stand-off orbit
+    gx = t.pos.x + Math.sin(a) * 230; gz = t.pos.z + Math.cos(a) * 230;
+    gy = Math.max(ground(u.pos.x, u.pos.z), t.pos.y) + (t.def.domain === 'air' ? 8 : 55);
+    const d3 = u.pos.distanceTo(t.pos); centerOf(t, TA).addScaledVector(t.vel, d3 / d.gun.vel);
+    u.aimYaw = Math.atan2(TA.x - u.pos.x, TA.z - u.pos.z);
+    if (d3 < d.gun.range) fireGun(u, TA, 0.02);
+    if (u.cdAlt <= 0 && d3 < d.alt.range && t.def.domain !== 'air') fireAlt(u, TA);
+  } else {
+    if (!u.patrol || hdist(u.pos, u.patrol) < 120) u.patrol = patrolPoint(u);
+    gx = u.patrol.x; gz = u.patrol.z; gy = ground(u.pos.x, u.pos.z) + 70; u.aimYaw = Math.atan2(gx - u.pos.x, gz - u.pos.z);
+  }
+  T1.set(gx - u.pos.x, 0, gz - u.pos.z); const l = T1.length();
+  if (l > 1) T1.multiplyScalar(Math.min(d.speed, l * 0.8) / l);
+  u.hv.set(T1.x, clamp((gy - u.pos.y) * 0.8, -d.speed * 0.4, d.speed * 0.5), T1.z);
+}
+function aiLand(u, dt) {
+  const d = u.def, t = u.target; let gx, gz, stop;
+  if (t) { gx = t.pos.x; gz = t.pos.z; stop = d.gun.range * 0.7; }
+  else if (d.role === 'cargo') {       // supply truck: base <-> depot at the rear map edge
+    if (!u.route) {
+      const b = BASE[u.team], s = u.team === ALLY ? 1 : -1;
+      u.route = { i: 1, loaded: false, pts: [{ x: b.x + s * 170, z: b.z + rnd(-90, 90) }, { x: b.x + s * rnd(150, 450), z: -MAP.z + 90 }] };
+    }
+    const r = u.route, p = r.pts[r.i]; gx = p.x; gz = p.z; stop = 0;
+    if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 35) { if (r.i === 0 && r.loaded) { deliver(u); r.loaded = false; } if (r.i === 1) r.loaded = true; r.i = 1 - r.i; }
+  }
+  else { const b = BASE[1 - u.team]; gx = b.x; gz = b.z + (u.id % 5 - 2) * 30; stop = 60; }
+  const dist = Math.hypot(gx - u.pos.x, gz - u.pos.z);
+  let want = Math.atan2(gx - u.pos.x, gz - u.pos.z);
+  if (terrainH(u.pos.x + Math.sin(u.yaw) * 25, u.pos.z + Math.cos(u.yaw) * 25) < World.water + 0.6) want = Math.atan2(gx > u.pos.x ? 0.6 : -0.6, -1);
+  const dy = angDiff(want, u.yaw);
+  u.turnIn = clamp(dy * 2, -1, 1);
+  u.throttle = dist > stop ? (Math.abs(dy) < 1 ? 1 : 0.3) : 0;
+  if (t) {
+    const d3 = u.pos.distanceTo(t.pos);
+    centerOf(t, TA).addScaledVector(t.vel, d3 / d.gun.vel);
+    u.aimYaw = Math.atan2(TA.x - u.pos.x, TA.z - u.pos.z);
+    if (d3 < d.gun.range) fireGun(u, TA, 0.02);
+    if (d.alt && u.cdAlt <= 0 && d3 < d.alt.range && t.def.armor) fireAlt(u, TA);
+  } else u.aimYaw = u.yaw;
+}
+function dockOf(team) { for (const u of units) if (u.def.model === 'dock' && u.team === team) return u; return null; }
+function aiSea(u, dt) {
+  const d = u.def, t = u.target; let gx, gz, thr = 1;
+  if (d.role === 'merchant') {
+    if (!u.route) {
+      const b = BASE[u.team], s = u.team === ALLY ? 1 : -1;
+      u.route = { i: 1, loaded: false, pts: [{ x: b.x + s * 45, z: coastZ(b.x) + 95 }, { x: b.x + s * rnd(300, 900), z: MAP.z - rnd(120, 260) }] };
+    }
+    const r = u.route, p = r.pts[r.i]; gx = p.x; gz = p.z;
+    if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 55) {
+      if (r.i === 0 && r.loaded) { deliver(u); r.loaded = false; }
+      if (r.i === 1) r.loaded = true;
+      r.i = 1 - r.i;
+    }
+  } else if (d.role === 'lander') {    // run in to the beach, unload, sail home
+    if (u.cargo) {
+      gx = u.beachX; gz = coastZ(gx) + 50;
+      if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 40 || (u.aground && u.pos.z < coastZ(u.pos.x) + 130)) unload(u);
+    } else { gx = u.pos.x; gz = MAP.z + 200; if (u.pos.z > MAP.z - 90) { despawn(u); return; } }
+  } else if (t) {
+    const dist = u.pos.distanceTo(t.pos), deep = t.def.sub && t.dive > 0.5;
+    if (d.sub) u.diveT = 1;
+    if (deep || dist > d.gun.range * 0.7 || (d.sub && dist > 330)) { gx = t.pos.x; gz = Math.max(t.pos.z, coastZ(t.pos.x) + 80); }
+    else { const b = Math.atan2(t.pos.x - u.pos.x, t.pos.z - u.pos.z) + Math.PI / 2 * (u.id % 2 ? 1 : -1); gx = u.pos.x + Math.sin(b) * 200; gz = u.pos.z + Math.cos(b) * 200; thr = 0.55; }
+    centerOf(t, TA).addScaledVector(t.vel, dist / d.gun.vel);
+    u.aimYaw = Math.atan2(TA.x - u.pos.x, TA.z - u.pos.z);
+    if (dist < d.gun.range && !deep) fireGun(u, TA, 0.015);
+    if (d.alt && u.cdAlt <= 0 && t.def.domain === 'sea' && dist < 430) { TB.copy(t.pos).addScaledVector(t.vel, dist / 58 * 0.8); fireAlt(u, TB); }
+  } else {
+    if (d.sub) u.diveT = 0;
+    if (!u.patrol || hdist(u.pos, u.patrol) < 90) u.patrol = V().set(rnd(-MAP.x + 350, MAP.x - 350), 0, rnd(220, MAP.z - 200));
+    gx = u.patrol.x; gz = u.patrol.z; u.aimYaw = u.yaw;
+  }
+  let want = Math.atan2(gx - u.pos.x, gz - u.pos.z);
+  const sy = Math.sin(u.yaw), cy = Math.cos(u.yaw);
+  if (!(d.role === 'lander' && u.cargo) && (terrainH(u.pos.x + sy * 45, u.pos.z + cy * 45) > World.water - 4 || terrainH(u.pos.x + sy * 100, u.pos.z + cy * 100) > World.water - 4 || u.pos.z > MAP.z - 40))
+    want = u.pos.z > MAP.z - 40 ? Math.PI : Math.atan2(gx > u.pos.x ? 0.5 : -0.5, 1);
+  for (const b of World.icebergs) {
+    if (b.k < 0.3) continue;
+    const dx = b.x - u.pos.x, dz = b.z - u.pos.z, dd = Math.hypot(dx, dz);
+    if (dd < b.r + d.len * 0.5 + 75) { const rel = angDiff(Math.atan2(dx, dz), u.yaw); if (Math.abs(rel) < 1.0) { want = u.yaw - (rel >= 0 ? 1 : -1) * 1.3; break; } }
+  }
+  const dy = angDiff(want, u.yaw);
+  u.turnIn = clamp(dy * 2, -1, 1); u.throttle = thr * (Math.abs(dy) > 1.5 ? 0.5 : 1);
+}
+function deliver(u) {
+  const pay = u.def.pay || 100;
+  if (u.team === ALLY) { money += pay; msg(`${u.def.name} delivered cargo  +$${pay}`, 'good'); }
+  else teamAI[AXIS].budget += pay * 0.6;
+}
+// destroyers, cruisers and torpedo boats roll depth charges onto any dived submarine close by
+function aswAuto(u, dt) {
+  u.cdDC -= dt; if (u.cdDC > 0) return; u.cdDC = 0.4;
+  for (const e of units) {
+    if (e.team === u.team || !e.def.sub || e.dive < 0.3) continue;
+    const dx = e.pos.x - u.pos.x, dz = e.pos.z - u.pos.z; if (Math.hypot(dx, dz) > 150) continue;
+    u.cdDC = 2.2 * World.reload; const t = 1.3;
+    T2.copy(u.pos); T2.y += 4;
+    addProj('bomb', T2, V().set((dx + e.vel.x * t) / t + rnd(-6, 6), 22, (dz + e.vel.z * t) / t + rnd(-6, 6)), u, 170, 30, 8);
+    return;
+  }
+}
+
+// -------------------------------------------------------------- per-unit update
+function updateUnit(u, dt) {
+  if (u.dead) return;
+  const d = u.def; u.cdGun -= dt; u.cdAlt -= dt; u.cdAA -= dt; u.prev.copy(u.pos);
+  if (d.domain === 'bld') {
+    if (u.built < 1) { u.built = Math.min(1, u.built + dt / 8); if (u.built >= 1 && u.team === ALLY) msg(`${d.name} is operational`, 'good'); }
+    else {
+      const near = u.pos.distanceToSquared(camera.position) < 700 * 700;
+      for (const p of u.people) {
+        p.mesh.visible = near; if (!near) continue;
+        p.a += p.sp * dt; const x = u.pos.x + Math.sin(p.a) * p.r, z = u.pos.z + Math.cos(p.a) * p.r;
+        p.mesh.position.set(x, terrainH(x, z) + 0.75 + Math.abs(Math.sin(time * 7 + p.a * 9)) * 0.12, z); p.mesh.rotation.y = p.a + (p.sp > 0 ? Math.PI / 2 : -Math.PI / 2);
+      }
+      if (d.model === 'factory' && near) { u.fxT -= dt; if (u.fxT <= 0) { u.fxT = 0.5; TC.copy(u.mesh.userData.stack).add(u.pos); fx(TC, 0x777777, 1.2, 5, 3, 5, 0.4); } }
+    }
+  } else {
+    if (u !== player) {
+      u.thinkT -= dt; if (u.thinkT <= 0) { u.thinkT = rnd(0.6, 1); pickTarget(u); }
+      if (u.target && (u.target.dead || u.target.team === u.team)) u.target = null;
+      u.throttleT = 1;
+      (d.heli ? aiHeli : d.domain === 'air' ? aiAir : d.domain === 'land' ? aiLand : aiSea)(u, dt);
+      if (u.dead) return;
+    }
+    (d.heli ? moveHeli : d.domain === 'air' ? moveAir : d.domain === 'land' ? moveLand : moveSea)(u, dt);
+    if (u.dead) return;
+    if (d.asw) aswAuto(u, dt);
+    u.vel.subVectors(u.pos, u.prev).divideScalar(dt);
+  }
+  if (d.aa && u.built >= 1) autoAA(u, dt);
+  if (u.bombQ > 0) {
+    u.bombT -= dt;
+    if (u.bombT <= 0) { u.bombT = 0.09; u.bombQ--; const a = d.alt; T2.copy(u.pos); T2.y -= 2.5; addProj(a.kind, T2, u.vel.clone().multiplyScalar(0.97), u, a.dmg, a.splash, 30); }
+  }
+  if (u.hp < u.maxHp * 0.5 && d.domain !== 'bld' || u.hp < u.maxHp * 0.35) {
+    u.fxT -= dt; if (u.fxT <= 0) { u.fxT = 0.3; centerOf(u, TC); TC.y += 1.5; smoke(TC, d.len ? 3.5 : 1.6, u.hp < u.maxHp * 0.25 ? 0x151515 : 0x555555); }
+  }
+  syncMesh(u, dt);
+}
+function sepR(u) { return u.def.len ? u.def.len * 0.36 : u.def.radius; }
+function separation() {
+  for (let i = 0; i < units.length; i++) {
+    const a = units[i], da = a.def.domain; if (da === 'air') continue;
+    for (let j = i + 1; j < units.length; j++) {
+      const b = units[j], db = b.def.domain; if (db === 'air' || (da === 'bld' && db === 'bld')) continue;
+      if (da !== db && !((da === 'bld' && db === 'land') || (da === 'land' && db === 'bld'))) continue;
+      const dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z, r = sepR(a) + sepR(b), dd = dx * dx + dz * dz;
+      if (dd >= r * r || dd < 0.0001) continue;
+      const dist = Math.sqrt(dd), push = (r - dist) * 0.5, nx = dx / dist, nz = dz / dist;
+      const ka = da === 'bld' ? 0 : db === 'bld' ? 2 : 1, kb = db === 'bld' ? 0 : da === 'bld' ? 2 : 1;
+      a.pos.x -= nx * push * ka; a.pos.z -= nz * push * ka; b.pos.x += nx * push * kb; b.pos.z += nz * push * kb;
+    }
+  }
+}
+function icebergHits(dt) {
+  for (const b of World.icebergs) {
+    if (b.k < 0.4) continue;
+    for (const u of units) {
+      if (u.def.domain !== 'sea') continue;
+      const dx = u.pos.x - b.x, dz = u.pos.z - b.z, dd = Math.hypot(dx, dz), r = b.r * 0.9 + u.def.beam;
+      if (dd < r) {
+        u.pos.x += dx / dd * (r - dd); u.pos.z += dz / dd * (r - dd); u.speed *= 0.6;
+        if (u === player && time - (u.iceMsg || 0) > 4) { u.iceMsg = time; msg('ICEBERG! The hull is taking damage.', 'bad'); sfx('boom', u.pos); }
+        damage(u, 160 * dt + Math.abs(u.speed) * 0.9, null, false);
+        if (u.dead) break;
+      }
+    }
+  }
+}
+
+// -------------------------------------------------------------- economy & commanders
+function incomeOf(team) { let s = 0; for (const u of units) if (u.team === team && u.def.domain === 'bld' && u.built >= 1) s += u.def.people * u.def.perHead; return s; }
+function build(team, id, instant) {
+  const p = plots[team].find(p => !p.unit); if (!p) return null;
+  if (p.rubble) { scene.remove(p.rubble.mesh); const i = wrecks.indexOf(p.rubble); if (i >= 0) wrecks.splice(i, 1); p.rubble = null; }
+  p.unit = spawn(id, team, p.x, p.z, { build: !instant, yaw: 0 }); return p.unit;
+}
+function commander(team, dt) {
+  const ai = teamAI[team];
+  let own = 0, foe = 0;
+  for (const u of units) if (u.def.domain !== 'bld') { if (u.team === team) own++; else foe++; }
+  // the losing side gets reinforcements faster, so the front line keeps moving both ways
+  ai.budget += dt * (9 + incomeOf(team) / INCOME_PERIOD * (team === AXIS ? 1 : 0.5)) * clamp((foe + 4) / (own + 4), 0.8, 2.2);
+  ai.timer -= dt; if (ai.timer > 0) return; ai.timer = rnd(4, 8);
+  if (team === AXIS && Math.random() < 0.22) {
+    const id = ['house', 'factory', 'aagun'][Math.floor(Math.random() * 3)];
+    if (ai.budget >= DEFS[id].cost + 200 && build(team, id)) ai.budget -= DEFS[id].cost;
+    return;
+  }
+  let mobile = 0, merch = 0;
+  for (const u of units) if (u.team === team && u.def.domain !== 'bld') { mobile++; if (u.def.role === 'merchant') merch++; }
+  if (mobile >= UNIT_CAP) return;
+  const list = ROSTER[team], id = list[Math.floor(Math.random() * list.length)], d = DEFS[id], c = d.aiCost || d.cost;
+  if (d.max && units.filter(u => u.team === team && u.def === d).length >= d.max) return;
+  if (c <= ai.budget) { ai.budget -= c; requisition(id, team); }
+}
+function raids(dt) {
+  raidT -= dt; if (raidT > 0) return; raidT = rnd(26, 44);
+  const team = Math.random() < 0.5 ? ALLY : AXIS, s = team === ALLY ? 1 : -1;
+  if (Math.random() < 0.45) {          // level-bomber formation crossing from its own rear
+    const bid = team === ALLY ? 'b25' : 'ju88', z0 = BASE[team].z + rnd(-300, 300);
+    for (let i = 0; i < 3; i++) spawn(bid, team, -s * (MAP.x + 60 + i * 45), z0 + (i - 1) * 55, { alt: 210, raid: true });
+    msg(team === ALLY ? 'Allied bomber formation crossing the front!' : 'WARNING: Axis bomber formation inbound!', team === ALLY ? 'good' : 'bad');
+    return;
+  }
+  if (!units.some(u => u.team !== team && u.def.domain === 'sea')) return;
+  const id = team === ALLY ? 'avenger' : 'fi167', n = 2 + (Math.random() < 0.4 ? 1 : 0), x0 = -s * rnd(300, 1500);
+  for (let i = 0; i < n; i++) spawn(id, team, x0 + i * 40, MAP.z - 30 - i * 25, { alt: 110, yaw: Math.PI, raid: true });
+  msg(team === ALLY ? 'Allied torpedo bombers inbound from the south!' : 'WARNING: Axis torpedo bombers hunting our ships!', team === ALLY ? 'good' : 'bad');
+}
+const GRIPES = [
+  'Sailor: "My socks are wet. Again."', 'Gunner: "Can\'t see a thing through this rain, sir."', 'Loader: "Shells keep slipping out of my hands!"',
+  'Deckhand: "Permission to complain about the weather, sir?"', 'Gunner: "The breech is flooded. Give me a minute."', 'Cook: "The soup is 40% rainwater now."',
+  'Private: "I joined the army to get OUT of the rain."', 'Helmsman: "Wipers. Somebody invent wipers."'
+];
+function economy(dt) {
+  incomeT -= dt;
+  if (incomeT <= 0) { incomeT = INCOME_PERIOD; lastIncome = incomeOf(ALLY); money += lastIncome; }
+  if (World.info.name === 'Rainy Season') { crewT -= dt; if (crewT <= 0) { crewT = rnd(9, 15); msg(GRIPES[Math.floor(Math.random() * GRIPES.length)], 'crew'); } }
+}
+
+// -------------------------------------------------------------- player
+function setPlayer(u) {
+  player = u; focusMesh = u.mesh; focusDef = u.def; camYaw = u.yaw; camPitch = u.def.domain === 'air' && !u.def.heli ? 0 : -0.12; u.hv.set(0, 0, 0); u.target = null; u.breakT = 0; u.throttleT = 1; u.cdGun = 0; u.cdAlt = Math.min(u.cdAlt, 1);
+  $('vname').textContent = u.def.name;
+  $('vdomain').textContent = (u.def.heli ? 'Helicopter' : u.def.sub ? 'Submarine' : { air: 'Aircraft', land: 'Ground forces', sea: 'Warship' }[u.def.domain]) + ' · crew ' + u.def.crew;
+  $('w2row').style.display = u.def.alt ? 'flex' : 'none'; if (u.def.alt) $('w2n').textContent = u.def.alt.label;
+  $('w1n').textContent = u.def.gun ? (u.def.gun.kind === 'shell' ? 'Main guns' : 'Machine guns') : 'Unarmed';
+}
+function playerDied(w) { player = null; focusMesh = w.mesh; state = 'dead'; deadT = 2.6; input.fire = false; input.zoom = false; msg('Your vehicle was destroyed.', 'bad'); }
+function switchVehicle() {
+  if (state !== 'playing') return;
+  const list = units.filter(u => u.team === ALLY && u.def.domain !== 'bld' && !NONCOMBAT[u.def.role]);
+  if (list.length < 2) return;
+  const i = list.indexOf(player); setPlayer(list[(i + 1) % list.length]); msg('Now commanding: ' + player.def.name);
+}
+function computeAim() {
+  fwd(camYaw, camPitch, aimDir); const o = camera.position; let best = 1500;
+  for (const u of units) {
+    if (u === player) continue;
+    centerOf(u, TC).sub(o); const t = TC.dot(aimDir); if (t < 8 || t > best) continue;
+    const r = u.def.len ? u.def.len * 0.4 : u.def.radius * 1.3;
+    if (TC.lengthSq() - t * t < r * r) best = t;
+  }
+  for (let t = 10; t < best; t += 10) {
+    TC.copy(o).addScaledVector(aimDir, t);
+    if (TC.y < ground(TC.x, TC.z)) { best = t; break; }
+  }
+  aimPoint.copy(o).addScaledVector(aimDir, best);
+}
+function nearestToReticle(maxAng) {
+  let best = null, ba = maxAng;
+  for (const u of units) {
+    if (u.team === ALLY) continue;
+    centerOf(u, TC).sub(camera.position); const dist = TC.length(); if (dist > 2600 * World.vis) continue;
+    if (u.def.sub && u.dive > 0.5 && dist > 450) continue;
+    const ang = Math.acos(clamp(TC.dot(aimDir) / dist, -1, 1)); if (ang < ba) { ba = ang; best = u; }
+  }
+  return best;
+}
+function snapZoom() {
+  fwd(camYaw, camPitch, aimDir);
+  const t = nearestToReticle(0.3); if (!t) return;
+  centerOf(t, TC).sub(camera.position); const l = TC.length();
+  camYaw = Math.atan2(TC.x, TC.z); camPitch = Math.asin(clamp(TC.y / l, -1, 1));
+}
+function playerControl(dt) {
+  const u = player; if (!u || u.dead || state !== 'playing') return;
+  const d = u.def, k = input.keys; computeAim();
+  if (d.heli) {                        // W/S forward-back, A/D strafe, E/Q climb-descend; nose follows the camera
+    const f = (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0), st = (k.KeyA ? 1 : 0) - (k.KeyD ? 1 : 0), up = (k.KeyE ? 1 : 0) - (k.KeyQ ? 1 : 0);
+    const sy = Math.sin(camYaw), cy = Math.cos(camYaw);
+    u.hv.set((sy * f + cy * st) * d.speed, up * d.speed * 0.5, (cy * f - sy * st) * d.speed); u.aimYaw = camYaw;
+  } else if (d.domain === 'air') {
+    u.steer.copy(aimDir);
+    if (k.KeyW) u.throttleT = Math.min(1.2, u.throttleT + dt * 0.5);
+    if (k.KeyS) u.throttleT = Math.max(0.55, u.throttleT - dt * 0.5);
+  } else {
+    u.throttle = (k.KeyW ? 1 : 0) - (k.KeyS ? 1 : 0); u.turnIn = (k.KeyA ? 1 : 0) - (k.KeyD ? 1 : 0);
+    u.aimYaw = Math.atan2(aimPoint.x - u.pos.x, aimPoint.z - u.pos.z);
+  }
+  if (input.fire) fireGun(u, aimPoint, 0);
+  if (k.Space) fireAlt(u, aimPoint);
+}
+function updateCamera(dt) {
+  if (state === 'menu') {
+    const a = performance.now() * 0.00006; camera.position.set(BASE[0].x + Math.sin(a) * 330, 120, BASE[0].z + 160 + Math.cos(a) * 330);
+    camera.lookAt(BASE[0].x, 10, BASE[0].z + 160); return;
+  }
+  if (!focusMesh) return;
+  const d = focusDef; fov += ((input.zoom ? 17 : 60) - fov) * Math.min(1, dt * 10);
+  if (Math.abs(camera.fov - fov) > 0.05) { camera.fov = fov; camera.updateProjectionMatrix(); }
+  const lim = d.domain === 'air' && !d.heli ? 1.3 : 1.0; camPitch = clamp(camPitch, -lim, lim);
+  fwd(camYaw, camPitch, aimDir);
+  const p = focusMesh.position; camera.position.set(p.x, p.y + d.camH, p.z).addScaledVector(aimDir, -d.camDist);
+  const g = ground(camera.position.x, camera.position.z) + 1.5; if (camera.position.y < g) camera.position.y = g;
+  T1.copy(camera.position).addScaledVector(aimDir, 100); camera.lookAt(T1);
+}
+
+// -------------------------------------------------------------- shop & menus
+let shopTab = 'Air';
+function statLine(d) {
+  if (d.domain === 'bld') return `${d.people} ${d.job}` + (d.perHead ? ` · +$${d.people * d.perHead} every ${INCOME_PERIOD}s` : '') + ` · ${d.hp} HP`;
+  return `${d.hp} HP · speed ${d.speed}` + (d.gun ? ` · gun ${d.gun.dmg}` : '') + (d.alt ? ` · ${d.alt.label}` : '') + (d.pay ? ` · pays $${d.pay} a trip` : '');
+}
+function renderShop() {
+  $('shopMoney').textContent = '$' + Math.floor(money);
+  const tabs = $('tabs'); tabs.innerHTML = '';
+  for (const t of Object.keys(SHOP)) {
+    const b = document.createElement('button'); b.className = 'tab' + (t === shopTab ? ' on' : ''); b.textContent = t;
+    b.onclick = () => { shopTab = t; renderShop(); }; tabs.append(b);
+  }
+  const box = $('shopCards'); box.innerHTML = '';
+  const mobile = units.filter(u => u.team === ALLY && u.def.domain !== 'bld').length;
+  for (const id of SHOP[shopTab]) {
+    const d = DEFS[id], isB = d.domain === 'bld', nc = NONCOMBAT[d.role], own = unlocked.has(id);
+    const full = isB ? !plots[ALLY].some(p => !p.unit) : mobile >= UNIT_CAP + 8;
+    const can = money >= d.cost && !full;
+    const c = document.createElement('div'); c.className = 'card' + (can || own ? '' : ' no'); c.style.cursor = 'default';
+    c.innerHTML = `<div class="k">${isB ? 'Building' : d.heli ? 'helicopter' : d.role}</div><div class="t"></div><div class="d"></div><div class="s"></div><div class="p">${own ? 'UNLOCKED' : '$' + d.cost.toLocaleString()}</div><div class="row"></div>`;
+    c.querySelector('.t').textContent = d.name; c.querySelector('.d').textContent = full && !own ? (isB ? 'No free building plots.' : 'Force limit reached.') : d.desc; c.querySelector('.s').textContent = statLine(d);
+    const row = c.querySelector('.row');
+    const mk = (label, alt, fn, on) => { const b = document.createElement('button'); b.className = 'btn' + (alt ? ' alt' : ''); b.textContent = label; b.disabled = !on; b.onclick = fn; row.append(b); };
+    if (isB) mk('Build', false, () => buy(id, false), can);
+    else if (nc) mk(d.role === 'lander' ? 'Send convoy' : 'Launch', false, () => buy(id, false), can);
+    else if (own) {
+      mk(deployCd > 0 ? `Deploy in ${Math.ceil(deployCd)}s` : 'Deploy · free', false, () => buy(id, true), deployCd <= 0);
+      mk('Escort $' + d.cost.toLocaleString(), true, () => buy(id, false), can);
+    } else { mk('Buy & command', false, () => buy(id, true), can); mk('Buy as escort', true, () => buy(id, false), can); }
+    box.append(c);
+  }
+}
+// Buying a vehicle once unlocks it for good: after that you can deploy into it (and respawn in it) for free.
+// Extra computer-flown escorts always cost the full price.
+function buy(id, command) {
+  const d = DEFS[id], free = command && unlocked.has(id) && !NONCOMBAT[d.role] && d.domain !== 'bld';
+  if (!free && money < d.cost) return;
+  if (d.domain === 'bld') { const u = build(ALLY, id); if (!u) return; money -= d.cost; msg(`Construction started: ${d.name}`, 'good'); renderShop(); return; }
+  if (free) {
+    if (deployCd > 0) return;
+    const old = player, u = spawnAt(id, ALLY); u.mine = true; setPlayer(u);
+    if (old && old.mine && !old.dead) despawn(old);      // your previous personal vehicle is withdrawn
+    deployCd = 20; lastBought = id; msg(`Deployed in ${d.name}`, 'good'); toggleShop(false); return;
+  }
+  money -= d.cost;
+  if (NONCOMBAT[d.role]) {
+    if (d.role === 'lander') { sealift(ALLY, d.cargo.slice()); msg(`${d.name} convoy is sailing in from the south`, 'good'); }
+    else { spawnAt(id, ALLY); msg(`${d.name} has started its supply runs`, 'good'); }
+    renderShop(); return;
+  }
+  const first = !unlocked.has(id); unlocked.add(id); lastBought = id;
+  if (command) { const u = spawnAt(id, ALLY); u.mine = true; setPlayer(u); msg(`${d.name} unlocked: it is now free to deploy and respawn in`, 'gold'); toggleShop(false); return; }
+  if (d.domain === 'land') { airlift(ALLY, [id]); msg(`${d.name} is being flown in by cargo plane`, 'good'); }
+  else { spawnAt(id, ALLY); msg(`${d.name} has joined the fight`, 'good'); }
+  if (first) msg(`${d.name} unlocked: free to deploy and respawn in`, 'gold');
+  renderShop();
+}
+function toggleShop(on) {
+  if (on && state === 'playing') { state = 'shop'; $('shop').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock(); input.fire = false; input.zoom = false; renderShop(); }
+  else if (!on && state === 'shop') { state = 'playing'; $('shop').classList.remove('on'); }
+}
+function renderStarters(ids, defId) {
+  const box = $('starters'); box.innerHTML = '';
+  const kind = { air: 'Air', land: 'Land', sea: 'Sea' };
+  for (const id of ids || STARTERS) {
+    const d = DEFS[id], c = document.createElement('button'); c.className = 'card' + (id === defId ? ' def' : '');
+    c.innerHTML = `<div class="k">${kind[d.domain]}${id === defId ? ' · default · press Enter' : ''}</div><div class="t"></div><div class="d"></div><div class="s"></div>`;
+    c.querySelector('.t').textContent = d.name; c.querySelector('.d').textContent = d.desc; c.querySelector('.s').textContent = statLine(d);
+    c.onclick = () => startAs(id); box.append(c);
+  }
+}
+function startAs(id) {
+  initAudio();
+  const first = state === 'menu';
+  const u = spawnAt(id, ALLY); u.mine = true; setPlayer(u); lastBought = id;
+  state = 'playing'; $('menu').classList.remove('on'); $('hud').style.display = 'block';
+  if (first) { const s = World.info; banner(s.name, s.desc); }
+  const cv = renderer.domElement; if (cv.requestPointerLock) { try { const r = cv.requestPointerLock(); if (r && r.catch) r.catch(() => { }); } catch (e) { } }
+}
+function showRespawn() {
+  $('menuTitle').textContent = 'Vehicle lost'; $('menuTitle').style.fontSize = '40px';
+  $('menuSub').textContent = 'The wreck stays where it fell. Respawn free in any vehicle you have unlocked. Your last purchase is the default.';
+  renderStarters([lastBought].concat([...unlocked].filter(id => id !== lastBought)), lastBought);
+  $('menu').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock();
+}
+function endGame(win) {
+  if (state === 'over') return; state = 'over';
+  $('menu').classList.remove('on'); $('shop').classList.remove('on');
+  $('overTitle').textContent = win ? 'Victory' : 'Defeat';
+  $('overSub').textContent = (win ? 'The Axis headquarters is rubble. ' : 'Allied headquarters has fallen. ') + `You destroyed ${stats.kills} enemies and ${stats.defect} ships defected to your side.`;
+  setTimeout(() => { $('over').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock(); }, 2500);
+}
+
+// -------------------------------------------------------------- HUD
+let ovCtx, miniCtx, miniBg;
+function drawOverlay() {
+  const cv = $('ov'), w = cv.width, h = cv.height, c = ovCtx; c.clearRect(0, 0, w, h);
+  if (state !== 'playing' && state !== 'dead') return;
+  zoomTarget = null;
+  if (input.zoom && player) zoomTarget = nearestToReticle(0.1);
+  for (const u of units) {
+    if (u === player) continue;
+    const dist = u.pos.distanceTo(camera.position), maxD = (u.def.domain === 'bld' ? 1100 : 2000) * World.vis;
+    if (dist > maxD) continue;
+    if (u.team === AXIS && u.def.sub && u.dive > 0.5 && dist > 450) continue;
+    T1.copy(u.pos); T1.y += (u.def.centerY || 0) + (u.def.len ? u.def.beam * 1.6 : u.def.radius * 0.9) + 3; T1.project(camera);
+    if (T1.z > 1 || Math.abs(T1.x) > 1 || Math.abs(T1.y) > 1) continue;
+    const sx = (T1.x + 1) / 2 * w, sy = (1 - T1.y) / 2 * h, en = u.team === AXIS, s = u === zoomTarget ? 8 : 5;
+    c.fillStyle = en ? '#ff5a4d' : '#5b93ff'; c.strokeStyle = 'rgba(0,0,0,.6)'; c.lineWidth = 1;
+    c.beginPath();
+    if (en) { c.moveTo(sx, sy - s); c.lineTo(sx + s, sy); c.lineTo(sx, sy + s); c.lineTo(sx - s, sy); }
+    else { c.moveTo(sx - s, sy - s * 0.7); c.lineTo(sx + s, sy - s * 0.7); c.lineTo(sx, sy + s * 0.8); }
+    c.closePath(); c.fill(); c.stroke();
+    if (dist < 420 || u === zoomTarget) {
+      const bw = 34; c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(sx - bw / 2, sy - s - 8, bw, 4);
+      c.fillStyle = en ? '#ff5a4d' : '#7fd66a'; c.fillRect(sx - bw / 2, sy - s - 8, bw * clamp(u.hp / u.maxHp, 0, 1), 4);
+    }
+  }
+  if (state === 'playing') {
+    const cx = w / 2, cy = h / 2, r = input.zoom ? 26 : 14;
+    c.strokeStyle = 'rgba(0,0,0,.55)'; c.lineWidth = 4; ret(c, cx, cy, r); c.strokeStyle = zoomTarget ? '#ff7a6a' : '#f2c14e'; c.lineWidth = 1.8; ret(c, cx, cy, r);
+    c.fillStyle = c.strokeStyle; c.fillRect(cx - 1, cy - 1, 2, 2);
+  }
+  if (hurtFlash > 0) { c.fillStyle = `rgba(255,40,20,${hurtFlash * 0.7})`; c.fillRect(0, 0, w, h); }
+  if (nukeFlash > 0) { c.fillStyle = `rgba(255,252,235,${Math.min(1, nukeFlash)})`; c.fillRect(0, 0, w, h); }
+}
+function ret(c, x, y, r) {
+  c.beginPath(); c.arc(x, y, r, 0, 6.283); c.stroke(); c.beginPath();
+  c.moveTo(x - r - 8, y); c.lineTo(x - r * 0.45, y); c.moveTo(x + r * 0.45, y); c.lineTo(x + r + 8, y);
+  c.moveTo(x, y - r - 8); c.lineTo(x, y - r * 0.45); c.moveTo(x, y + r * 0.45); c.lineTo(x, y + r + 8); c.stroke();
+}
+function drawMini() {
+  const cv = $('mini'), w = cv.width, h = cv.height, c = miniCtx;
+  if (!miniBg) {
+    miniBg = document.createElement('canvas'); miniBg.width = w; miniBg.height = h; const b = miniBg.getContext('2d');
+    for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
+      const t = terrainH((x / w * 2 - 1) * MAP.x, (y / h * 2 - 1) * MAP.z);
+      b.fillStyle = t > 0.5 ? '#46663a' : t > -3 ? '#8a8560' : '#17405a'; b.fillRect(x, y, 2, 2);
+    }
+  }
+  c.drawImage(miniBg, 0, 0);
+  const X = x => (x / MAP.x + 1) / 2 * w, Z = z => (z / MAP.z + 1) / 2 * h;
+  c.fillStyle = 'rgba(20,20,20,.8)'; for (const k of wrecks) c.fillRect(X(k.mesh.position.x) - 1, Z(k.mesh.position.z) - 1, 2, 2);
+  c.fillStyle = '#fff'; for (const b of World.icebergs) if (b.k > 0.3) { c.beginPath(); c.arc(X(b.x), Z(b.z), 2, 0, 6.3); c.fill(); }
+  const fogR = 1500 * World.vis;
+  for (const u of units) {
+    if (u === player) continue;
+    if (u.team === AXIS && World.vis < 0.6 && focusMesh && hdist(u.pos, focusMesh.position) > fogR && u.def.domain !== 'bld') continue;
+    if (u.team === AXIS && u.def.sub && u.dive > 0.5 && focusMesh && hdist(u.pos, focusMesh.position) > 450) continue;
+    c.fillStyle = u.team === ALLY ? '#6aa0ff' : '#ff5a4d';
+    const x = X(u.pos.x), z = Z(u.pos.z);
+    if (u.def.model === 'airport') c.fillRect(x - 9, z + 1, 18, 2);
+    if (u.def.domain === 'bld') c.fillRect(x - 2, z - 2, u.def.model === 'hq' ? 6 : 4, u.def.model === 'hq' ? 6 : 4);
+    else if (u.def.domain === 'air') { c.beginPath(); c.moveTo(x, z - 3); c.lineTo(x + 3, z + 2); c.lineTo(x - 3, z + 2); c.fill(); }
+    else { c.beginPath(); c.arc(x, z, u.def.domain === 'sea' ? 3 : 2, 0, 6.3); c.fill(); }
+  }
+  if (focusMesh) {
+    const p = focusMesh.position, x = X(p.x), z = Z(p.z);
+    c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.beginPath(); c.arc(x, z, 4, 0, 6.3); c.stroke();
+    c.beginPath(); c.moveTo(x, z); c.lineTo(x + Math.sin(camYaw) * 12, z + Math.cos(camYaw) * 12); c.stroke();
+  }
+}
+function updateHUD(dt) {
+  if (hurtFlash > 0) hurtFlash -= dt;
+  if (nukeFlash > 0) nukeFlash -= dt * 0.6;
+  hudT -= dt; if (hudT > 0) return; hudT = 0.12;
+  $('money').textContent = '$' + Math.floor(money).toLocaleString();
+  const inc = incomeOf(ALLY);
+  $('income').textContent = `+$${inc} every ${INCOME_PERIOD}s from buildings`;
+  const s = World.info;
+  $('season').textContent = `${s.icon} ${s.name}`; $('seasonDesc').textContent = s.desc;
+  $('seasonBar').style.width = (World.remaining / SEASON_LEN * 100) + '%';
+  const wx = $('wx'); wx.className = { Summer: 'heat', Fall: 'fog', Winter: 'snow', 'Rainy Season': 'rain' }[s.name];
+  let workers = 0, residents = 0, gunners = 0, sailors = 0, merch = 0, fac = 0, hou = 0;
+  for (const u of units) {
+    if (u.team !== ALLY) continue; const d = u.def;
+    if (d.domain === 'bld') { if (u.built < 1) continue; if (d.job === 'workers') { workers += d.people; if (d.model === 'factory') fac++; } else if (d.job === 'residents') { residents += d.people; hou++; } else if (d.job === 'gunners') gunners += d.people; }
+    else if (d.domain === 'sea') { sailors += d.crew; if (d.role === 'merchant') merch++; if (d.aa) gunners += Math.round(d.crew * 0.1); }
+    else if (d.aa) gunners += d.crew - 2;
+  }
+  $('people').innerHTML = `<span>Factory workers (${fac} factories)</span><b>${workers}</b><span>Residents paying bills (${hou} houses)</span><b>${residents}</b><span>Sailors at sea (${merch} merchants)</span><b>${sailors.toLocaleString()}</b><span>Gunners on duty</span><b>${gunners}</b>`;
+  const m = $('morale');
+  if (s.reload > 1) { m.textContent = 'Crew morale: soaked and grumbling (reloads 35% slower)'; m.style.color = '#9fc4e0'; }
+  else { m.textContent = 'Crew morale: steady'; m.style.color = '#b9d48a'; }
+  const u = player;
+  if (u) {
+    const d = u.def;
+    $('hp').firstElementChild.style.width = clamp(u.hp / u.maxHp * 100, 0, 100) + '%';
+    $('hp').firstElementChild.style.background = u.hp < u.maxHp * 0.3 ? '#ff5a4d' : u.hp < u.maxHp * 0.6 ? '#f2c14e' : '#6fcf5a';
+    let st = `HP ${Math.max(0, Math.ceil(u.hp))}/${u.maxHp} · ${Math.round(Math.abs(u.speed) * 2.2)} mph`;
+    if (d.sub) st += u.dive > 0.5 ? ' · SUBMERGED' : ' · surfaced';
+    if (d.domain === 'air') st += ` · alt ${Math.round((u.pos.y - ground(u.pos.x, u.pos.z)) * 3)} ft · throttle ${Math.round(u.throttleT * 100)}%`;
+    $('vstat').textContent = st;
+    if (d.gun) $('w1').style.width = clamp(1 - u.cdGun / (d.gun.rate * World.reload), 0, 1) * 100 + '%';
+    if (d.alt) $('w2').style.width = clamp(1 - u.cdAlt / (d.alt.cd * World.reload), 0, 1) * 100 + '%';
+  }
+  const tp = $('target');
+  if (zoomTarget && !zoomTarget.dead) {
+    tp.style.display = 'block'; const d = zoomTarget.def;
+    $('tkind').textContent = 'Axis ' + ({ air: 'aircraft', land: 'ground unit', sea: 'vessel', bld: 'building' }[d.domain]);
+    $('tname').textContent = d.name; $('thp').firstElementChild.style.width = clamp(zoomTarget.hp / zoomTarget.maxHp * 100, 0, 100) + '%';
+    $('tdist').textContent = Math.round(zoomTarget.pos.distanceTo(focusMesh.position) * 3) + ' ft';
+  } else tp.style.display = 'none';
+}
+
+// -------------------------------------------------------------- setup & loop
+function setupTeams() {
+  for (const team of [ALLY, AXIS]) {
+    const b = BASE[team], s = team === ALLY ? 1 : -1;
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 5; c++) plots[team].push({ x: b.x + (c - 2) * 46 - s * 10, z: b.z + (r - 1.5) * 46, unit: null, rubble: null });
+    // interleave so early buildings spread out
+    plots[team].sort((p, q) => Math.hypot(p.x - b.x, p.z - b.z) - Math.hypot(q.x - b.x, q.z - b.z));
+    spawn('hq', team, b.x - s * 170, b.z, { yaw: s * Math.PI / 2 });
+    spawn('dock', team, b.x, coastZ(b.x) - 6, { yaw: 0 });
+    spawn('airport', team, AIRPORT[team].x, AIRPORT[team].z - 45, { yaw: 0 });
+    for (const id of ['factory', 'house', 'house', 'aagun', 'aagun']) build(team, id, true);
+    const ids = team === ALLY ? ['spitfire', 'spitfire', 'mustang', 'r4', 'c47', 'troops', 'troops', 'jeep', 'sherman', 'sherman', 'halftrack', 'truck', 'truck', 'ward', 'ward', 'pt', 'gato', 'atlanta', 'liberty', 'liberty']
+      : ['bf109', 'bf109', 'fw190', 'fa223', 'ju52', 'grenadier', 'grenadier', 'kubel', 'panzer4', 'panzer4', 'flakwagen', 'opel', 'opel', 'z23', 'z23', 'sboot', 'uboat', 'hipper', 'freighter', 'freighter'];
+    for (const id of ids) spawnAt(id, team);
+  }
+}
+function update(dt) {
+  time += dt; World.update(dt); if (deployCd > 0) deployCd -= dt;
+  playerControl(dt);
+  for (const u of units.slice()) updateUnit(u, dt);
+  separation(); icebergHits(dt);
+  updateProjs(dt); updateWrecks(dt); updateFx(dt);
+  commander(ALLY, dt); commander(AXIS, dt); raids(dt); economy(dt);
+  if (state === 'dead') { deadT -= dt; if (deadT <= 0 && !$('menu').classList.contains('on')) showRespawn(); }
+}
+let lastT = 0;
+function loop(now) {
+  requestAnimationFrame(loop);
+  const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
+  if (state === 'playing' || state === 'dead' || state === 'over') update(dt);
+  updateCamera(dt); World.render(dt, camera, now / 1000);
+  renderer.render(scene, camera);
+  drawOverlay(); drawMini(); updateHUD(dt);
+}
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  const o = $('ov'); o.width = innerWidth; o.height = innerHeight;
+}
+function bindInput() {
+  const cv = renderer.domElement;
+  cv.addEventListener('mousedown', e => {
+    if (state !== 'playing') return;
+    if (document.pointerLockElement !== cv && cv.requestPointerLock) { try { const r = cv.requestPointerLock(); if (r && r.catch) r.catch(() => { }); } catch (err) { } }
+    if (e.button === 0) input.fire = true;
+    if (e.button === 2) { input.zoom = true; snapZoom(); }
+  });
+  addEventListener('mouseup', e => { if (e.button === 0) input.fire = false; if (e.button === 2) input.zoom = false; });
+  addEventListener('contextmenu', e => e.preventDefault());
+  addEventListener('mousemove', e => {
+    if (state !== 'playing' && state !== 'dead') return;
+    const s = 0.0023 * (fov / 60);
+    camYaw -= (e.movementX || 0) * s; camPitch = clamp(camPitch - (e.movementY || 0) * s, -1.3, 1.3);
+  });
+  addEventListener('keydown', e => {
+    if (e.code === 'Tab') { e.preventDefault(); if (!e.repeat) switchVehicle(); return; }
+    if (e.code === 'KeyB' && !e.repeat) { toggleShop(state !== 'shop'); return; }
+    if (e.code === 'Escape') { toggleShop(false); return; }
+    if (e.code === 'Enter' && state === 'dead' && $('menu').classList.contains('on')) { startAs(lastBought); return; }
+    if (e.code === 'KeyC' && !e.repeat && state === 'playing' && player && player.def.sub) { player.diveT = player.diveT > 0.5 ? 0 : 1; msg(player.diveT ? 'Dive! Dive! Dive!' : 'Surfacing.'); }
+    if (e.code === 'Space') e.preventDefault();
+    input.keys[e.code] = true;
+  });
+  addEventListener('keyup', e => { input.keys[e.code] = false; });
+  addEventListener('blur', () => { input.keys = {}; input.fire = false; input.zoom = false; });
+  addEventListener('resize', resize);
+}
+function init() {
+  renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+  scene = new THREE.Scene(); camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 11000);
+  ovCtx = $('ov').getContext('2d'); miniCtx = $('mini').getContext('2d');
+  World.init(scene);
+  World.onSeason = s => { banner(s.name, s.desc); msg(`Season change: ${s.name}. ${s.desc}.`); };
+  setupTeams(); bindInput(); renderStarters(); resize();
+  requestAnimationFrame(loop);
+}
+// debug / test handle
+window.G = { units, wrecks, projs, World, step(n, dt) { for (let i = 0; i < n; i++) update(dt || 0.033); }, get player() { return player; }, get money() { return money; }, set money(v) { money = v; }, get state() { return state; }, startAs, buy, toggleShop, switchVehicle, damage, kill, spawnAt, spawn, airlift, sealift, requisition, unlocked, setPlayer, get lastBought() { return lastBought; }, get deployCd() { return deployCd; }, set deployCd(v) { deployCd = v; } };
+init();
