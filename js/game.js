@@ -13,7 +13,7 @@ const teamAI = [{ budget: 250, timer: 6 }, { budget: 250, timer: 4 }];
 const plots = [[], []];
 const stats = { kills: 0, defect: 0 };
 const unlocked = new Set(STARTERS);
-let lastBought = 'spitfire', deployCd = 0, nukeFlash = 0;
+let lastBought = 'spitfire', deployCd = 0, nukeFlash = 0, touchMode = false;
 const V = () => new THREE.Vector3();
 const T1 = V(), T2 = V(), T3 = V(), TA = V(), TB = V(), TC = V();
 const $ = id => document.getElementById(id);
@@ -818,6 +818,13 @@ function setPlayer(u) {
   $('vdomain').textContent = (u.def.heli ? 'Helicopter' : u.def.sub ? 'Submarine' : { air: 'Aircraft', land: 'Ground forces', sea: 'Warship' }[u.def.domain]) + ' · crew ' + u.def.crew;
   $('w2row').style.display = u.def.alt ? 'flex' : 'none'; if (u.def.alt) $('w2n').textContent = u.def.alt.label;
   $('w1n').textContent = u.def.gun ? (u.def.gun.kind === 'shell' ? 'Main guns' : 'Machine guns') : 'Unarmed';
+  const tc = $('touch'); tc.classList.toggle('heli', !!u.def.heli); tc.classList.toggle('sub', !!u.def.sub); tc.classList.toggle('noalt', !u.def.alt);
+  if (u.def.alt) $('tAlt').textContent = u.def.alt.label.split(' ')[0];
+  $('tDive').textContent = u.diveT > 0.5 ? 'Rise' : 'Dive';
+}
+function toggleDive() {
+  if (state !== 'playing' || !player || !player.def.sub) return;
+  player.diveT = player.diveT > 0.5 ? 0 : 1; msg(player.diveT ? 'Dive! Dive! Dive!' : 'Surfacing.'); $('tDive').textContent = player.diveT ? 'Rise' : 'Dive';
 }
 function playerDied(w) { player = null; focusMesh = w.mesh; state = 'dead'; deadT = 2.6; input.fire = false; input.zoom = false; msg('Your vehicle was destroyed.', 'bad'); }
 function switchVehicle() {
@@ -1056,6 +1063,7 @@ function updateHUD(dt) {
   if (hurtFlash > 0) hurtFlash -= dt;
   if (nukeFlash > 0) nukeFlash -= dt * 0.6;
   hudT -= dt; if (hudT > 0) return; hudT = 0.12;
+  if (touchMode) $('tZoom').classList.toggle('on', input.zoom);
   $('money').textContent = '$' + Math.floor(money).toLocaleString();
   const inc = incomeOf(ALLY);
   $('income').textContent = `+$${inc} every ${INCOME_PERIOD}s from buildings`;
@@ -1132,6 +1140,62 @@ function loop(now) {
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
   const o = $('ov'); o.width = innerWidth; o.height = innerHeight;
+  document.body.classList.toggle('compact', touchMode || innerWidth < 820 || innerHeight < 520);
+}
+// ---- touch controls: left thumb drives, right thumb aims, on-screen buttons do the rest
+function setTouchMode() {
+  if (touchMode) return; touchMode = true;
+  document.body.classList.add('touch'); renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5)); resize();
+}
+function bindTouch() {
+  const cv = renderer.domElement, stick = $('stick'), knob = stick.firstElementChild, look = {};
+  let stickId = null, sx = 0, sy = 0;
+  const live = () => state === 'playing' || state === 'dead';
+  const setStick = (dx, dy) => {
+    const k = input.keys; k.KeyW = dy < -0.3; k.KeyS = dy > 0.3; k.KeyA = dx < -0.35; k.KeyD = dx > 0.35;
+    knob.style.transform = `translate(${dx * 34}px,${dy * 34}px)`;
+  };
+  const endStick = () => { stickId = null; setStick(0, 0); stick.classList.remove('on'); stick.style.left = ''; stick.style.top = ''; stick.style.bottom = ''; };
+  cv.addEventListener('touchstart', e => {
+    e.preventDefault(); setTouchMode(); if (!live()) return;
+    for (const t of e.changedTouches) {
+      if (stickId === null && t.clientX < innerWidth * 0.42 && t.clientY > innerHeight * 0.35) {
+        stickId = t.identifier; sx = t.clientX; sy = t.clientY; stick.classList.add('on');
+        stick.style.left = (sx - 56) + 'px'; stick.style.top = (sy - 56) + 'px'; stick.style.bottom = 'auto';
+      } else look[t.identifier] = { x: t.clientX, y: t.clientY };
+    }
+  }, { passive: false });
+  addEventListener('touchmove', e => {
+    if (e.target === cv || (e.target.closest && e.target.closest('#touch'))) e.preventDefault();
+    for (const t of e.changedTouches) {
+      if (t.identifier === stickId) { let dx = (t.clientX - sx) / 46, dy = (t.clientY - sy) / 46; const l = Math.hypot(dx, dy); if (l > 1) { dx /= l; dy /= l; } setStick(dx, dy); continue; }
+      const l = look[t.identifier]; if (!l || !live()) continue;
+      const s = 0.0052 * (fov / 60);
+      camYaw -= (t.clientX - l.x) * s; camPitch = clamp(camPitch - (t.clientY - l.y) * s, -1.3, 1.3); l.x = t.clientX; l.y = t.clientY;
+    }
+  }, { passive: false });
+  const end = e => { for (const t of e.changedTouches) { if (t.identifier === stickId) endStick(); delete look[t.identifier]; } };
+  addEventListener('touchend', end); addEventListener('touchcancel', end);
+  // a button that is held: touch (the Fire button also aims while dragged) or mouse
+  const hold = (id, down, up, aim) => {
+    const el = $(id);
+    el.addEventListener('touchstart', e => { e.preventDefault(); setTouchMode(); const t = e.changedTouches[0]; if (aim) look[t.identifier] = { x: t.clientX, y: t.clientY }; el.classList.add('on'); down(); }, { passive: false });
+    const off = e => { e.preventDefault(); el.classList.remove('on'); if (up) up(); };
+    el.addEventListener('touchend', off); el.addEventListener('touchcancel', off);
+    el.addEventListener('mousedown', e => { e.preventDefault(); down(); });
+    if (up) { el.addEventListener('mouseup', up); el.addEventListener('mouseleave', up); }
+  };
+  hold('tFire', () => { if (state === 'playing') input.fire = true; }, () => { input.fire = false; }, true);
+  hold('tAlt', () => { input.keys.Space = true; }, () => { input.keys.Space = false; });
+  hold('tUp', () => { input.keys.KeyE = true; }, () => { input.keys.KeyE = false; });
+  hold('tDown', () => { input.keys.KeyQ = true; }, () => { input.keys.KeyQ = false; });
+  const tap = (id, fn) => { const el = $(id); el.addEventListener('touchstart', e => { e.preventDefault(); setTouchMode(); fn(); }, { passive: false }); el.addEventListener('mousedown', e => { e.preventDefault(); fn(); }); };
+  tap('tZoom', () => { if (state !== 'playing') return; input.zoom = !input.zoom; if (input.zoom) snapZoom(); });
+  tap('tDive', toggleDive);
+  tap('tShop', () => toggleShop(true));
+  tap('tSwitch', switchVehicle);
+  $('shopClose').onclick = () => toggleShop(false);
+  if ((window.matchMedia && matchMedia('(pointer: coarse)').matches) || /[?&]touch\b/.test(location.search)) setTouchMode();
 }
 function bindInput() {
   const cv = renderer.domElement;
@@ -1141,7 +1205,7 @@ function bindInput() {
     if (e.button === 0) input.fire = true;
     if (e.button === 2) { input.zoom = true; snapZoom(); }
   });
-  addEventListener('mouseup', e => { if (e.button === 0) input.fire = false; if (e.button === 2) input.zoom = false; });
+  addEventListener('mouseup', e => { if (touchMode && e.target.closest && e.target.closest('#touch')) return; if (e.button === 0) input.fire = false; if (e.button === 2) input.zoom = false; });
   addEventListener('contextmenu', e => e.preventDefault());
   addEventListener('mousemove', e => {
     if (state !== 'playing' && state !== 'dead') return;
@@ -1153,7 +1217,7 @@ function bindInput() {
     if (e.code === 'KeyB' && !e.repeat) { toggleShop(state !== 'shop'); return; }
     if (e.code === 'Escape') { toggleShop(false); return; }
     if (e.code === 'Enter' && state === 'dead' && $('menu').classList.contains('on')) { startAs(lastBought); return; }
-    if (e.code === 'KeyC' && !e.repeat && state === 'playing' && player && player.def.sub) { player.diveT = player.diveT > 0.5 ? 0 : 1; msg(player.diveT ? 'Dive! Dive! Dive!' : 'Surfacing.'); }
+    if (e.code === 'KeyC' && !e.repeat) toggleDive();
     if (e.code === 'Space') e.preventDefault();
     input.keys[e.code] = true;
   });
@@ -1168,7 +1232,7 @@ function init() {
   ovCtx = $('ov').getContext('2d'); miniCtx = $('mini').getContext('2d');
   World.init(scene);
   World.onSeason = s => { banner(s.name, s.desc); msg(`Season change: ${s.name}. ${s.desc}.`); };
-  setupTeams(); bindInput(); renderStarters(); resize();
+  setupTeams(); bindInput(); bindTouch(); renderStarters(); resize();
   requestAnimationFrame(loop);
 }
 // debug / test handle

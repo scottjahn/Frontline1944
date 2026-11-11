@@ -2,13 +2,16 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#101410">
 <title>Frontline 1944</title>
 <style>
   :root { --amber:#f2c14e; --panel:rgba(16,20,16,.72); --line:rgba(242,193,78,.35); --ally:#5b93ff; --axis:#ff5a4d; --ink:#e9e6d8; }
   * { box-sizing:border-box; }
-  html,body { margin:0; height:100%; overflow:hidden; background:#000; color:var(--ink); font-family:"Trebuchet MS","Segoe UI",sans-serif; user-select:none; }
-  #c { position:fixed; inset:0; width:100%; height:100%; display:block; cursor:crosshair; }
+  html,body { margin:0; height:100%; overflow:hidden; overscroll-behavior:none; -webkit-user-select:none; -webkit-touch-callout:none; -webkit-tap-highlight-color:transparent; background:#000; color:var(--ink); font-family:"Trebuchet MS","Segoe UI",sans-serif; user-select:none; }
+  #c { position:fixed; inset:0; width:100%; height:100%; display:block; cursor:crosshair; touch-action:none; }
   #ov { position:fixed; inset:0; width:100%; height:100%; pointer-events:none; }
   .hud { position:fixed; pointer-events:none; text-shadow:0 1px 2px #000; }
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:4px; padding:10px 12px; }
@@ -74,6 +77,60 @@
   .help { margin-top:18px; font-size:12.5px; color:#cfcab4; line-height:1.9; }
   .shophead { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; }
   #shopMoney { font-size:24px; font-weight:800; color:var(--amber); }
+
+  /* ---------- compact HUD (phones, small windows, any touch device) ---------- */
+  body.compact #keys { display:none; }
+  body.compact .panel { padding:6px 8px; }
+  body.compact #tl { top:calc(6px + env(safe-area-inset-top)); left:calc(6px + env(safe-area-inset-left)); width:158px; }
+  body.compact #money { font-size:20px; }
+  body.compact #income, body.compact #seasonDesc, body.compact #people, body.compact #morale { display:none; }
+  body.compact #season { margin-top:3px; font-size:12px; }
+  body.compact #bl { bottom:auto; top:calc(76px + env(safe-area-inset-top)); left:calc(6px + env(safe-area-inset-left)); width:158px; }
+  body.compact #vname { font-size:13px; }
+  body.compact #vstat { font-size:10px; margin-top:3px; }
+  body.compact .wpn { font-size:9.5px; margin-top:3px; gap:5px; }
+  body.compact .wpn span { width:62px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  body.compact #tr { top:calc(6px + env(safe-area-inset-top)); right:calc(6px + env(safe-area-inset-right)); }
+  body.compact #mini { width:132px; height:auto; }
+  body.compact #feed { top:calc(146px + env(safe-area-inset-top)); right:calc(6px + env(safe-area-inset-right)); width:190px; font-size:10.5px; }
+  body.compact #target { top:calc(6px + env(safe-area-inset-top)); min-width:170px; padding:5px 8px; }
+  body.compact #tname { font-size:12px; }
+  body.compact #banner { font-size:22px; top:30%; width:90%; }
+  body.compact #banner small { font-size:12px; }
+  body.compact h1 { font-size:34px; }
+  body.compact h2 { font-size:20px; }
+  body.compact .screen { padding:12px; }
+  body.compact .sub { font-size:13px; margin:6px 0 12px; }
+  body.compact .cards { grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:8px; }
+  body.compact .card { padding:10px; }
+  body.compact .card .t { font-size:15px; }
+  body.compact .help { font-size:11.5px; line-height:1.7; margin-top:12px; }
+  @media (orientation:portrait) { body.compact #target { top:calc(190px + env(safe-area-inset-top)); } }
+  .help .th { display:none; }
+  body.touch .help .kh { display:none; }
+  body.touch .help .th { display:block; }
+  #shopClose { flex:none; padding:8px 14px; }
+
+  /* ---------- touch controls ---------- */
+  #touch { display:none; position:fixed; inset:0; z-index:5; pointer-events:none; }
+  body.touch #touch { display:block; }
+  #touch button { position:absolute; pointer-events:auto; touch-action:none; border-radius:50%; border:2px solid rgba(242,193,78,.7); background:rgba(16,20,16,.45); color:var(--amber);
+    font:inherit; font-weight:800; font-size:11px; letter-spacing:.06em; text-transform:uppercase; padding:0; display:flex; align-items:center; justify-content:center; text-align:center; line-height:1.1; }
+  #touch button.on, #touch button:active { background:rgba(242,193,78,.55); color:#1a1a12; }
+  #tFire { right:calc(16px + env(safe-area-inset-right)); bottom:calc(30px + env(safe-area-inset-bottom)); width:88px; height:88px; font-size:14px !important; border-color:rgba(255,90,77,.85) !important; color:#ffb0a8 !important; }
+  #tAlt { right:calc(116px + env(safe-area-inset-right)); bottom:calc(18px + env(safe-area-inset-bottom)); width:66px; height:66px; }
+  #tZoom { right:calc(22px + env(safe-area-inset-right)); bottom:calc(132px + env(safe-area-inset-bottom)); width:60px; height:60px; }
+  #tUp, #tDive { right:calc(104px + env(safe-area-inset-right)); bottom:calc(98px + env(safe-area-inset-bottom)); width:58px; height:58px; }
+  #tDown { right:calc(174px + env(safe-area-inset-right)); bottom:calc(72px + env(safe-area-inset-bottom)); width:58px; height:58px; }
+  #tUp, #tDown, #tDive { display:none !important; }
+  #touch.heli #tUp, #touch.heli #tDown, #touch.sub #tDive { display:flex !important; }
+  #touch.noalt #tAlt { display:none; }
+  #tShop, #tSwitch { top:calc(110px + env(safe-area-inset-top)); width:62px; height:30px; border-radius:15px !important; font-size:10px !important; }
+  #tShop { right:calc(6px + env(safe-area-inset-right)); }
+  #tSwitch { right:calc(74px + env(safe-area-inset-right)); }
+  #stick { position:absolute; left:calc(34px + env(safe-area-inset-left)); bottom:calc(34px + env(safe-area-inset-bottom)); width:112px; height:112px; margin:0; border-radius:50%; border:2px solid rgba(233,230,216,.35); background:rgba(16,20,16,.25); opacity:.55; }
+  #stick.on { opacity:1; }
+  #stick i { position:absolute; left:50%; top:50%; width:48px; height:48px; margin:-24px 0 0 -24px; border-radius:50%; background:rgba(233,230,216,.5); }
 </style>
 </head>
 <body>
@@ -112,15 +169,31 @@
   <div class="hud" id="banner"></div>
 </div>
 
+<div id="touch">
+  <div id="stick"><i></i></div>
+  <button id="tSwitch">Swap</button>
+  <button id="tShop">Shop</button>
+  <button id="tZoom">Zoom</button>
+  <button id="tUp">Up</button>
+  <button id="tDown">Down</button>
+  <button id="tDive">Dive</button>
+  <button id="tAlt">Bomb</button>
+  <button id="tFire">Fire</button>
+</div>
+
 <div class="screen on" id="menu">
   <div class="box">
     <h1 id="menuTitle">Frontline 1944</h1>
     <div class="sub" id="menuSub">Land, sea and air. Destroy the Axis headquarters before they destroy yours. Choose your first command:</div>
     <div class="cards" id="starters"></div>
     <div class="help">
+      <div class="th">Left thumb: drag to drive (planes: up/down is throttle, they fly where you aim). Right thumb: drag anywhere to aim, or hold <kbd>Fire</kbd> and drag to aim while shooting.<br>
+      <kbd>Zoom</kbd> locks onto the nearest enemy &nbsp;·&nbsp; <kbd>Shop</kbd> buys vehicles and buildings &nbsp;·&nbsp; <kbd>Swap</kbd> takes over another Allied vehicle. Landscape plays best.</div>
+      <div class="kh">
       <kbd>Mouse</kbd> aim &nbsp;·&nbsp; <kbd>Left click</kbd> fire &nbsp;·&nbsp; <kbd>Right click</kbd> zoom in on the nearest enemy &nbsp;·&nbsp; <kbd>W A S D</kbd> drive (planes: W/S throttle, they fly where you aim)<br>
       <kbd>Space</kbd> secondary weapon &nbsp;·&nbsp; <kbd>B</kbd> shop: vehicles and buildings &nbsp;·&nbsp; <kbd>Tab</kbd> take over another Allied vehicle<br>
-      <kbd>Q</kbd> <kbd>E</kbd> helicopter down / up &nbsp;·&nbsp; <kbd>C</kbd> submarine dive / surface &nbsp;·&nbsp; Buy a vehicle once and it is yours for free from then on<br>
+      <kbd>Q</kbd> <kbd>E</kbd> helicopter down / up &nbsp;·&nbsp; <kbd>C</kbd> submarine dive / surface</div>
+      Buy a vehicle once and it is yours for free from then on.<br>
       Houses and factories earn money. So do merchant ships, supply trucks, cargo planes and every enemy you destroy. Badly damaged ships may defect. Watch the seasons.
     </div>
   </div>
@@ -128,8 +201,8 @@
 
 <div class="screen" id="shop">
   <div class="box">
-    <div class="shophead"><h2>Quartermaster</h2><div id="shopMoney"></div></div>
-    <div class="sub" style="margin:2px 0 0">The battle is paused. <kbd>B</kbd> or <kbd>Esc</kbd> to return.</div>
+    <div class="shophead"><h2>Quartermaster</h2><div id="shopMoney"></div><button class="btn" id="shopClose">Back to battle</button></div>
+    <div class="sub" style="margin:2px 0 0">The battle is paused.</div>
     <div class="tabs" id="tabs"></div>
     <div class="cards" id="shopCards"></div>
   </div>
