@@ -6,6 +6,10 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#101410">
+<meta name="description" content="A 3D World War II battle on land, at sea and in the air.">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <title>Frontline 1944</title>
 <style>
   :root { --amber:#f2c14e; --panel:rgba(16,20,16,.72); --line:rgba(242,193,78,.35); --ally:#5b93ff; --axis:#ff5a4d; --ink:#e9e6d8; }
@@ -216,10 +220,14 @@
   </div>
 </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="js/vendor/three.min.js"></script>
 <script src="js/defs.js"></script>
 <script src="js/models.js"></script>
 <script src="js/world.js"></script>
 <script src="js/game.js"></script>
+<script>
+  // Offline support and installability (PWA)
+  if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+</script>
 </body>
 </html>

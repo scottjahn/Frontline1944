@@ -1,6 +1,6 @@
 // Tiny static file server: `node serve.js` then open http://localhost:8123
 const http = require('http'), fs = require('fs'), path = require('path');
-const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png' };
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' };
 http.createServer((req, res) => {
   const rel = decodeURIComponent(req.url.split('?')[0]);
   const file = path.join(__dirname, path.normalize(rel === '/' ? '/index.html' : rel));
