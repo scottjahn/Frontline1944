@@ -81,6 +81,31 @@
   .help { margin-top:18px; font-size:12.5px; color:#cfcab4; line-height:1.9; }
   .shophead { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; }
   #shopMoney { font-size:24px; font-weight:800; color:var(--amber); }
+  #battle { font-size:11.5px; color:#e9e6d8; margin-top:4px; font-variant-numeric:tabular-nums; }
+  #cap { top:78px; left:50%; transform:translateX(-50%); min-width:260px; text-align:center; display:none; font-size:13px; font-weight:700; }
+  #capBar { background:var(--ally); width:0; }
+  #camp { display:block; width:100%; height:auto; border:1px solid var(--line); border-radius:6px; cursor:pointer; background:#12303f; }
+  #acct { text-align:right; font-size:14px; color:#c9c5b0; }
+  #acct b { font-size:26px; color:var(--amber); font-variant-numeric:tabular-nums; }
+  #acct i { color:#b9e08a; font-style:normal; font-weight:700; }
+  #acct small { display:block; font-size:11px; color:#a9a58e; }
+  #sectorInfo { margin:10px 0 0; font-size:14px; color:#e9e6d8; }
+  #sectorInfo b { color:var(--amber); }
+  #armory { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+  .arm { background:rgba(30,36,28,.92); border:1px solid var(--line); border-radius:6px; padding:14px; display:flex; flex-direction:column; gap:6px; }
+  .arm .k { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--amber); }
+  .arm .t { font-size:17px; font-weight:800; margin-bottom:4px; }
+  .tier { border-top:1px solid rgba(255,255,255,.1); padding-top:6px; font-size:12.5px; display:flex; flex-direction:column; gap:4px; color:#cfcab4; }
+  .tier b { color:var(--ink); }
+  .tier.have b { color:#b9e08a; }
+  .tier.lock { opacity:.45; }
+  .tier .btn { flex:none; }
+  .note { grid-column:1/-1; font-size:12.5px; color:#cfcab4; }
+  #menuBtns { margin-top:14px; max-width:520px; }
+  #menuBtns .btn { padding:10px 8px; font-size:13px; }
+  #resetLink { color:#a9a58e; cursor:pointer; text-decoration:underline; }
+  #overRows { display:grid; grid-template-columns:1fr auto; gap:6px 24px; max-width:420px; margin:0 auto 22px; text-align:left; font-size:15px; font-variant-numeric:tabular-nums; }
+  #overRows b { color:var(--amber); text-align:right; }
 
   /* ---------- compact HUD (phones, small windows, any touch device) ---------- */
   body.compact #keys { display:none; }
@@ -96,6 +121,9 @@
   body.compact .wpn span { width:62px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   body.compact #tr { top:calc(6px + env(safe-area-inset-top)); right:calc(6px + env(safe-area-inset-right)); }
   body.compact #mini { width:132px; height:auto; }
+  body.compact #battle { font-size:10px; }
+  body.compact #cap { top:calc(52px + env(safe-area-inset-top)); min-width:200px; font-size:11px; }
+  body.compact #acct b { font-size:20px; }
   body.compact #feed { top:calc(146px + env(safe-area-inset-top)); right:calc(6px + env(safe-area-inset-right)); width:190px; font-size:10.5px; }
   body.compact #target { top:calc(6px + env(safe-area-inset-top)); min-width:170px; padding:5px 8px; }
   body.compact #tname { font-size:12px; }
@@ -129,9 +157,10 @@
   #tUp, #tDown, #tDive { display:none !important; }
   #touch.heli #tUp, #touch.heli #tDown, #touch.sub #tDive { display:flex !important; }
   #touch.noalt #tAlt { display:none; }
-  #tShop, #tSwitch { top:calc(110px + env(safe-area-inset-top)); width:62px; height:30px; border-radius:15px !important; font-size:10px !important; }
+  #tShop, #tSwitch, #tMap { top:calc(110px + env(safe-area-inset-top)); width:44px; height:30px; border-radius:15px !important; font-size:10px !important; }
   #tShop { right:calc(6px + env(safe-area-inset-right)); }
-  #tSwitch { right:calc(74px + env(safe-area-inset-right)); }
+  #tSwitch { right:calc(54px + env(safe-area-inset-right)); }
+  #tMap { right:calc(102px + env(safe-area-inset-right)); }
   #stick { position:absolute; left:calc(34px + env(safe-area-inset-left)); bottom:calc(34px + env(safe-area-inset-bottom)); width:112px; height:112px; margin:0; border-radius:50%; border:2px solid rgba(233,230,216,.35); background:rgba(16,20,16,.25); opacity:.55; }
   #stick.on { opacity:1; }
   #stick i { position:absolute; left:50%; top:50%; width:48px; height:48px; margin:-24px 0 0 -24px; border-radius:50%; background:rgba(233,230,216,.5); }
@@ -146,6 +175,7 @@
   <div class="hud panel" id="tl">
     <div class="lbl">War chest</div>
     <div id="money">$0</div>
+    <div id="battle"></div>
     <div id="income"></div>
     <div id="season"></div>
     <div id="seasonDesc"></div>
@@ -164,17 +194,19 @@
   <div class="hud" id="tr"><canvas id="mini" width="230" height="168"></canvas></div>
   <div class="hud" id="feed"></div>
   <div class="hud panel" id="target"><div class="lbl" id="tkind"></div><div id="tname"></div><div class="bar" id="thp"><i></i></div><div class="lbl" id="tdist" style="margin-top:5px"></div></div>
+  <div class="hud panel" id="cap"><div id="capTxt"></div><div class="bar"><i id="capBar"></i></div></div>
   <div class="hud" id="keys">
     <kbd>Mouse</kbd> aim &nbsp; <kbd>LMB</kbd> fire &nbsp; <kbd>RMB</kbd> zoom on enemy<br>
     <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> drive / throttle &nbsp; <kbd>Space</kbd> bombs · torpedo · rockets<br>
     <kbd>Q</kbd><kbd>E</kbd> helicopter down / up &nbsp; <kbd>C</kbd> submarine dive / surface<br>
-    <kbd>B</kbd> buy vehicles &amp; buildings &nbsp; <kbd>Tab</kbd> switch vehicle
+    <kbd>B</kbd> quartermaster &nbsp; <kbd>M</kbd> campaign map &nbsp; <kbd>Tab</kbd> switch vehicle
   </div>
   <div class="hud" id="banner"></div>
 </div>
 
 <div id="touch">
   <div id="stick"><i></i></div>
+  <button id="tMap">Map</button>
   <button id="tSwitch">Swap</button>
   <button id="tShop">Shop</button>
   <button id="tZoom">Zoom</button>
@@ -187,18 +219,25 @@
 
 <div class="screen on" id="menu">
   <div class="box">
-    <h1 id="menuTitle">Frontline 1944</h1>
-    <div class="sub" id="menuSub">Land, sea and air. Destroy the Axis headquarters before they destroy yours. Choose your first command:</div>
+    <div class="shophead"><h1 id="menuTitle">Frontline 1944</h1><div id="acct"></div></div>
+    <div class="sub" id="menuSub"></div>
+    <canvas id="camp" width="1120" height="480"></canvas>
+    <div id="sectorInfo"></div>
+    <div class="tabs" id="menuTabs"></div>
     <div class="cards" id="starters"></div>
+    <div id="armory"></div>
+    <div class="row" id="menuBtns"></div>
     <div class="help">
+      <b>The campaign.</b> Seven sectors lie between your headquarters and theirs, each with two points on land and one at sea. Destroy a point's command post, then hold the ground with tanks and infantry (or the water with warships) to capture it. Points fall in order, so the front line moves one step at a time. A headquarters can only be attacked once its home sector is breached.<br>
+      <b>Battles.</b> Each battle lasts twelve minutes and picks up where the last one left off. Kills and captures earn credits, paid out when the battle ends. Spend them in the Armory on permanent unlock tiers. The Axis field whatever tiers you have unlocked.<br>
       <div class="th">Left thumb: drag to drive (planes: up/down is throttle, they fly where you aim). Right thumb: drag anywhere to aim, or hold <kbd>Fire</kbd> and drag to aim while shooting.<br>
-      <kbd>Zoom</kbd> locks onto the nearest enemy &nbsp;·&nbsp; <kbd>Shop</kbd> buys vehicles and buildings &nbsp;·&nbsp; <kbd>Swap</kbd> takes over another Allied vehicle. Landscape plays best.</div>
+      <kbd>Zoom</kbd> locks onto the nearest enemy &nbsp;·&nbsp; <kbd>Shop</kbd> buys escorts and buildings &nbsp;·&nbsp; <kbd>Map</kbd> opens this map &nbsp;·&nbsp; <kbd>Swap</kbd> takes over another Allied vehicle. Landscape plays best.</div>
       <div class="kh">
       <kbd>Mouse</kbd> aim &nbsp;·&nbsp; <kbd>Left click</kbd> fire &nbsp;·&nbsp; <kbd>Right click</kbd> zoom in on the nearest enemy &nbsp;·&nbsp; <kbd>W A S D</kbd> drive (planes: W/S throttle, they fly where you aim)<br>
-      <kbd>Space</kbd> secondary weapon &nbsp;·&nbsp; <kbd>B</kbd> shop: vehicles and buildings &nbsp;·&nbsp; <kbd>Tab</kbd> take over another Allied vehicle<br>
+      <kbd>Space</kbd> secondary weapon &nbsp;·&nbsp; <kbd>B</kbd> quartermaster: escorts, supply and buildings &nbsp;·&nbsp; <kbd>M</kbd> campaign map &nbsp;·&nbsp; <kbd>Tab</kbd> take over another Allied vehicle<br>
       <kbd>Q</kbd> <kbd>E</kbd> helicopter down / up &nbsp;·&nbsp; <kbd>C</kbd> submarine dive / surface</div>
-      Buy a vehicle once and it is yours for free from then on.<br>
-      Houses and factories earn money. So do merchant ships, supply trucks, cargo planes and every enemy you destroy. Badly damaged ships may defect. Watch the seasons.
+      Houses, factories and held points earn war-chest money during a battle. So do merchant ships, supply trucks, cargo planes and every enemy you destroy.<br>
+      <a id="resetLink">reset progress</a>
     </div>
   </div>
 </div>
@@ -216,12 +255,14 @@
   <div class="box" style="text-align:center">
     <h1 id="overTitle"></h1>
     <div class="sub" id="overSub"></div>
-    <button class="btn" style="max-width:240px;font-size:15px;padding:12px" onclick="location.reload()">New campaign</button>
+    <div id="overRows"></div>
+    <button class="btn" style="max-width:280px;font-size:15px;padding:12px" onclick="location.reload()">Back to the campaign map</button>
   </div>
 </div>
 
 <script src="js/vendor/three.min.js"></script>
 <script src="js/defs.js"></script>
+<script src="js/account.js"></script>
 <script src="js/models.js"></script>
 <script src="js/world.js"></script>
 <script src="js/game.js"></script>

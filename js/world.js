@@ -41,7 +41,7 @@ const World = {
 
     // terrain
     const W = MAP.x * 2 + 1600, D = MAP.z * 2 + 1600;
-    const geo = new THREE.PlaneGeometry(W, D, 230, 170); geo.rotateX(-Math.PI / 2);
+    const geo = new THREE.PlaneGeometry(W, D, 400, 200); geo.rotateX(-Math.PI / 2);
     const p = geo.attributes.position, n = p.count;
     this.baseCol = new Float32Array(n * 3);
     const col = new Float32Array(n * 3);
@@ -62,21 +62,22 @@ const World = {
     this.applyTint();
 
     // water
-    this.waterMesh = new THREE.Mesh(new THREE.PlaneGeometry(16000, 16000), new THREE.MeshLambertMaterial({ color: 0x1d5f8c, transparent: true, opacity: 0.86 }));
+    this.waterMesh = new THREE.Mesh(new THREE.PlaneGeometry(26000, 26000), new THREE.MeshLambertMaterial({ color: 0x1d5f8c, transparent: true, opacity: 0.86 }));
     this.waterMesh.rotation.x = -Math.PI / 2; scene.add(this.waterMesh);
 
     // trees
     const tg = new THREE.ConeGeometry(3, 9, 6); tg.translate(0, 5.5, 0);
     this.treeMat = new THREE.MeshLambertMaterial({ color: s.tree });
-    const N = 1150; this.trees = new THREE.InstancedMesh(tg, this.treeMat, N);
+    const N = 4200; this.trees = new THREE.InstancedMesh(tg, this.treeMat, N);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3();
     let c = 0, guard = 0;
-    while (c < N && guard++ < 20000) {
+    while (c < N && guard++ < 60000) {
       const x = rnd(-MAP.x - 300, MAP.x + 300), z = rnd(-MAP.z - 300, 60);
       if (coastZ(x) - z < 60) continue;
       let ok = true;
       for (const b of BASE) if (Math.abs(x - b.x) < 260 && Math.abs(z - b.z) < 170) ok = false;
       for (const a of AIRPORT) if (Math.abs(x - a.x) < 330 && Math.abs(z - a.z) < 190) ok = false;
+      for (const q of POINTS) if (!q.sea && Math.abs(x - q.x) < 150 && Math.abs(z - q.z) < 150) ok = false;
       if (Math.abs(z - BASE[0].z) < 60 && Math.abs(x) < BASE[1].x) ok = false; // keep the main road clear
       if (!ok) continue;
       const k = rnd(0.7, 1.5);
@@ -142,7 +143,7 @@ const World = {
 
   spawnIcebergs() {
     let tries = 0;
-    while (this.icebergs.length < 48 && tries++ < 800) {
+    while (this.icebergs.length < 110 && tries++ < 3000) {
       const x = rnd(-MAP.x + 100, MAP.x - 100), z = rnd(120, MAP.z - 80);
       if (terrainH(x, z) > -8) continue;
       const r = rnd(14, 34), mesh = mIceberg(r);

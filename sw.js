@@ -1,6 +1,6 @@
 // Frontline 1944 service worker: makes the whole game available offline.
 // Bump VERSION whenever the list of files changes; file contents refresh on their own (see fetch).
-const VERSION = 'v1';
+const VERSION = 'v2';
 const CACHE = 'frontline1944-' + VERSION;
 const FILES = [
   './',
@@ -8,6 +8,7 @@ const FILES = [
   'manifest.webmanifest',
   'js/vendor/three.min.js',
   'js/defs.js',
+  'js/account.js',
   'js/models.js',
   'js/world.js',
   'js/game.js',

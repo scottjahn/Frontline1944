@@ -11,9 +11,9 @@ const aimDir = new THREE.Vector3(0, 0, 1), aimPoint = new THREE.Vector3();
 const input = { keys: {}, fire: false, zoom: false };
 const teamAI = [{ budget: 250, timer: 6 }, { budget: 250, timer: 4 }];
 const plots = [[], []];
-const stats = { kills: 0, defect: 0 };
-const unlocked = new Set(STARTERS);
+const stats = { kills: 0, defect: 0, caps: 0, credits: 0, killCr: 0, capCr: 0 };
 let lastBought = 'spitfire', deployCd = 0, nukeFlash = 0, touchMode = false;
+let battleT = BATTLE_LEN, selCol = 0, startOwned = 0, hqMsgT = -99, capT = 0, frontMesh = null, menuTab = 'Deploy';
 const V = () => new THREE.Vector3();
 const T1 = V(), T2 = V(), T3 = V(), TA = V(), TB = V(), TC = V();
 const $ = id => document.getElementById(id);
@@ -101,7 +101,7 @@ function spawn(id, team, x, z, o) {
   u.aimYaw = u.yaw;
   if (d.domain === 'air') { u.pos.set(x, o.alt || 140, z); u.speed = d.speed; }
   else if (d.domain === 'sea') u.pos.set(x, World.water, z);
-  else u.pos.set(x, terrainH(x, z), z);
+  else u.pos.set(x, d.model === 'seafort' ? 0 : terrainH(x, z), z);
   fwd(u.yaw, 0, u.steer);
   if (d.domain === 'bld' && d.model !== 'dock') addPeople(u);
   scene.add(u.mesh); syncMesh(u, 1); units.push(u);
@@ -112,21 +112,95 @@ function addPeople(u) {
   const cols = d.job === 'workers' ? [0x3b5b8a, 0x2f4a70] : d.job === 'gunners' ? [u.team === ALLY ? 0x5a6a3c : 0x6a6d60] : [0xb04a3a, 0x3a7a5a, 0xc9a23a, 0x6a4a8a, 0xdedede];
   for (let i = 0; i < n; i++) {
     const m = figure(cols[i % cols.length]); m.visible = false; scene.add(m);
-    u.people.push({ mesh: m, a: rnd(0, 6.28), r: d.job === 'gunners' ? rnd(2, 3.2) : d.radius + rnd(1.5, 7), sp: (d.job === 'gunners' ? 0.15 : rnd(0.12, 0.3)) * (Math.random() < 0.5 ? -1 : 1) });
+    u.people.push({ mesh: m, a: rnd(0, 6.28), r: d.model === 'aagun' ? rnd(2, 3.2) : d.radius + rnd(1.5, 7), sp: (d.model === 'aagun' ? 0.15 : rnd(0.12, 0.3)) * (Math.random() < 0.5 ? -1 : 1) });
   }
 }
 function airportOf(team) { for (const u of units) if (u.def.model === 'airport' && u.team === team) return u; return null; }
 // aircraft start on the airport runway, ground units at the base, ships off the dock
-function spawnAt(id, team) {
-  const d = DEFS[id], b = BASE[team], s = team === ALLY ? 1 : -1, ap = AIRPORT[team];
+// ---- campaign geometry: capture points, objectives and the front line ----
+// the first point from a team's home side that it does not hold: that is where it attacks. null = it holds the whole lane
+function reach(team, lane) {
+  if (team === ALLY) { for (let c = 0; c < COLS; c++) if (PT(c, lane).owner !== ALLY) return PT(c, lane); }
+  else for (let c = COLS - 1; c >= 0; c--) if (PT(c, lane).owner !== AXIS) return PT(c, lane);
+  return null;
+}
+function homeSpot(team, sea) {
+  const b = BASE[team], s = team === ALLY ? 1 : -1;
+  return sea ? { x: b.x + s * 160, z: coastZ(b.x + s * 160) + 260 } : { x: b.x + s * 330, z: b.z };
+}
+// where a team musters in a lane: its foremost held point (no further forward than column `col`, if given)
+function stage(team, lane, col) {
+  const s = team === ALLY ? 1 : -1, o = reach(team, lane);
+  let c = o ? o.col - s : (team === ALLY ? COLS - 1 : 0);
+  if (col !== undefined) c = team === ALLY ? Math.min(c, col) : Math.max(c, col);
+  for (; c >= 0 && c < COLS; c -= s) if (PT(c, lane).owner === team) return PT(c, lane);
+  return homeSpot(team, lane === SEA_LANE);
+}
+function frontX(lane) {
+  let a = -1, b = COLS;
+  for (let c = 0; c < COLS; c++) { const o = PT(c, lane).owner; if (o === ALLY) a = Math.max(a, c); else if (o === AXIS) b = Math.min(b, c); }
+  return ((a < 0 ? BASE[0].x + 500 : PT(a, lane).x) + (b >= COLS ? BASE[1].x - 500 : PT(b, lane).x)) / 2;
+}
+function frontPath() {
+  const f0 = frontX(0), f1 = frontX(1), f2 = frontX(2);
+  return [[f0, -MAP.z], [f0, LANE[0].z], [f1, LANE[1].z], [f1, 120], [f2, 520], [f2, MAP.z]];
+}
+// a point can only be taken by the side that already holds its neighbour (or its own home edge): no leap-frogging
+function canCap(p, team) { return team === ALLY ? (p.col === 0 || PT(p.col - 1, p.lane).owner === ALLY) : (p.col === COLS - 1 || PT(p.col + 1, p.lane).owner === AXIS); }
+// a headquarters can only be hurt once the enemy holds ground in its home sector
+function hqOpen(team) { const c = team === ALLY ? 0 : COLS - 1; return POINTS.some(p => p.col === c && p.owner === 1 - team); }
+function allyOwned() { return POINTS.filter(p => p.owner === ALLY).length; }
+function deepZ(x, z) { let g = 0; while (terrainH(x, z) > -9 && g++ < 40) z += 40; return z; }
+function carrierOf(team, near, maxD) {
+  let best = null, bd = maxD;
+  for (const u of units) if (u.team === team && u.def.role === 'carrier' && u !== player) { const dd = Math.hypot(u.pos.x - near.x, u.pos.z - near.z); if (dd < bd) { bd = dd; best = u; } }
+  return best;
+}
+// catapult an aircraft off a carrier's flight deck
+function deckLaunch(id, c, slot) {
+  const d = DEFS[id], y = c.yaw, k = c.def.len * 0.3 - (slot || 0) * 16;
+  const u = spawn(id, c.team, c.pos.x + Math.sin(y) * k, c.pos.z + Math.cos(y) * k, { alt: World.water + 6.6 + (d.gear || 1.6), yaw: y });
+  u.speed = d.heli ? 0 : d.speed * 0.7; u.pitch = 0.12; fwd(y, 0.22, u.steer);
+  u.breakT = 5; u.breakPt.set(c.pos.x + Math.sin(y) * 900, 170, c.pos.z + Math.cos(y) * 900);
+  TC.copy(u.pos); fx(TC, 0xffffff, 1, 5, 0.6, 2, 0.5);
+  return u;
+}
+function launchWing(c) {
+  const id = (c.team === ALLY ? ['p38', 'mustang', 'spitfire'] : ['bf110', 'fw190', 'bf109']).find(i => Account.has(i));
+  let n = 0; for (const u of units) if (u.wingOf === c) n++;
+  if (n >= 4) { if (c === player) msg('The whole air wing is already airborne.'); return false; }
+  const k = Math.min(2, 4 - n);
+  for (let i = 0; i < k; i++) deckLaunch(id, c, i).wingOf = c;
+  if (c.team === ALLY) msg(`${c.def.name} launched ${k} ${DEFS[id].name}${k > 1 ? 's' : ''}`, 'good');
+  return true;
+}
+// Where things enter the battle. Combat units arrive just behind their side's front (or behind sector `col` when the
+// player picks one); supply vehicles work from the home base. Aircraft use the home runway, a carrier deck, or arrive airborne.
+function spawnAt(id, team, col) {
+  const d = DEFS[id], b = BASE[team], s = team === ALLY ? 1 : -1, ap = AIRPORT[team], rear = !!NONCOMBAT[d.role];
   if (d.domain === 'air') {
-    if (!airportOf(team)) return spawn(id, team, -s * (MAP.x + 80), ap.z + rnd(-200, 200), { alt: 160 + rnd(0, 40) });   // airfield lost: fly in from the rear
-    if (d.heli) { const x = ap.x + 62 + rnd(-6, 6), z = ap.z - 29 + rnd(-6, 6); return spawn(id, team, x, z, { alt: terrainH(x, z) + 2.3 }); }
-    const x = ap.x - s * 150, z = ap.z + rnd(-7, 7);
-    const u = spawn(id, team, x, z, { alt: terrainH(x, z) + (d.gear || 1.5) }); u.takeoff = true; u.speed = 0; return u;
+    if (rear || col === (team === ALLY ? 0 : COLS - 1)) {
+      if (!airportOf(team)) return spawn(id, team, -s * (MAP.x + 80), ap.z + rnd(-200, 200), { alt: 160 + rnd(0, 40) });   // airfield lost: fly in from the rear
+      if (d.heli) { const x = ap.x + 62 + rnd(-6, 6), z = ap.z - 29 + rnd(-6, 6); return spawn(id, team, x, z, { alt: terrainH(x, z) + 2.3 }); }
+      const x = ap.x - s * 150, z = ap.z + rnd(-7, 7);
+      const u = spawn(id, team, x, z, { alt: terrainH(x, z) + (d.gear || 1.5) }); u.takeoff = true; u.speed = 0; return u;
+    }
+    const sp = stage(team, col === undefined ? Math.floor(Math.random() * LANES) : 1, col);
+    if (col !== undefined) { const c = carrierOf(team, sp, 3200); if (c) return deckLaunch(id, c, 0); }
+    const x = clamp(sp.x - s * rnd(900, 1500), -MAP.x, MAP.x), z = sp.z + rnd(-350, 350);
+    return spawn(id, team, x, z, { alt: d.heli ? ground(x, z) + 60 : 170 + rnd(0, 40) });
   }
-  if (d.domain === 'land') return spawn(id, team, b.x + s * rnd(150, 230), b.z + rnd(-130, 130));
-  const x = b.x + s * rnd(20, 240); return spawn(id, team, x, coastZ(x) + rnd(130, 300));
+  if (d.domain === 'land') {
+    if (rear) return spawn(id, team, b.x + s * rnd(150, 230), b.z + rnd(-130, 130));
+    let lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane, col);
+    if (col !== undefined) { const o = stage(team, 1 - lane, col); if ((o.x - sp.x) * s > 0) { sp = o; lane = 1 - lane; } }
+    let x = sp.x - s * rnd(50, 150), z = sp.z + rnd(-110, 110);
+    if (terrainH(x, z) < World.water + 1.5) { x = sp.x - s * 40; z = sp.z - 30; }
+    const u = spawn(id, team, x, z); u.lane = lane; return u;
+  }
+  if (rear) { const x = b.x + s * rnd(20, 240); return spawn(id, team, x, coastZ(x) + rnd(130, 300)); }
+  const sp = stage(team, SEA_LANE, col), x = clamp(sp.x - s * rnd(120, 380), -MAP.x + 100, MAP.x - 100);
+  return spawn(id, team, x, deepZ(x, sp.z + rnd(-220, 220)));
 }
 function despawn(u) {
   u.dead = true; const i = units.indexOf(u); if (i >= 0) units.splice(i, 1);
@@ -136,9 +210,10 @@ function despawn(u) {
 const CHUTE_GEO = new THREE.SphereGeometry(7, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2);
 const CHUTE_MAT = new THREE.MeshLambertMaterial({ color: 0xf2efe2, side: THREE.DoubleSide });
 function airlift(team, ids) {
-  const s = team === ALLY ? 1 : -1, b = BASE[team], z = b.z + rnd(-250, 250), x = b.x + s * rnd(250, 650);
-  const u = spawn(team === ALLY ? 'c54' : 'me323', team, -s * (MAP.x + 60), z, { alt: 190 });
-  u.cargo = ids; u.dropPt = V().set(x, terrainH(x, z) + 100, z); u.exitPt = V().set(-s * (MAP.x + 400), 230, z + rnd(-300, 300));
+  const s = team === ALLY ? 1 : -1, lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane);
+  const z = sp.z + rnd(-160, 160), x = sp.x - s * rnd(60, 220), lim = MAP.x + 120;
+  const u = spawn(team === ALLY ? 'c54' : 'me323', team, clamp(x - s * 1700, -lim, lim), z, { alt: 190 });
+  u.cargo = ids; u.dropLane = lane; u.dropPt = V().set(x, terrainH(x, z) + 100, z); u.exitPt = V().set(clamp(x - s * 2600, -lim, lim), 230, z + rnd(-300, 300));
   return u;
 }
 function paradrop(u) {
@@ -146,18 +221,18 @@ function paradrop(u) {
     const x = u.pos.x + rnd(-25, 25), z = u.pos.z + rnd(-25, 25), n = spawn(id, u.team, x, z);
     n.chute = Math.max(5, u.pos.y - terrainH(x, z) - 6);
     n.chuteMesh = new THREE.Mesh(CHUTE_GEO, CHUTE_MAT); n.chuteMesh.position.y = 9; n.chuteMesh.userData.chute = true; n.mesh.add(n.chuteMesh);
-    n.pos.y = terrainH(x, z) + n.chute; syncMesh(n, 1);
+    n.pos.y = terrainH(x, z) + n.chute; n.lane = u.dropLane; syncMesh(n, 1);
     if (u.team === ALLY) msg(`${u.def.name} dropped reinforcements: ${n.def.name}`, 'good');
   }
   u.cargo = null;
 }
 function sealift(team, ids) {
-  const s = team === ALLY ? 1 : -1, x = BASE[team].x + s * rnd(250, 750);
-  const u = spawn(team === ALLY ? 'lst' : 'mfp', team, x, MAP.z - 110, { yaw: Math.PI });
-  u.cargo = ids; u.beachX = x; return u;
+  const s = team === ALLY ? 1 : -1, sp = stage(team, 1), x = clamp(sp.x - s * rnd(0, 350), -MAP.x + 200, MAP.x - 200);
+  const u = spawn(team === ALLY ? 'lst' : 'mfp', team, x, coastZ(x) + 1500, { yaw: Math.PI });
+  u.cargo = ids; u.beachX = x; u.exitZ = u.pos.z; return u;
 }
 function unload(u) {
-  for (const id of u.cargo) { const x = u.pos.x + rnd(-30, 30); spawn(id, u.team, x, coastZ(x) - rnd(18, 45), { yaw: Math.PI }); }
+  for (const id of u.cargo) { const x = u.pos.x + rnd(-30, 30); spawn(id, u.team, x, coastZ(x) - rnd(18, 45), { yaw: Math.PI }).lane = 1; }
   if (u.team === ALLY) msg(`${u.def.name} landed ${u.cargo.length} units on the beach`, 'good');
   u.cargo = null;
 }
@@ -293,6 +368,7 @@ function fireGun(u, aim, xs) {
 function fireAlt(u, aim) {
   const a = u.def.alt; if (!a || u.cdAlt > 0) return false;
   u.cdAlt = a.cd * World.reload;
+  if (a.kind === 'launch') { if (!launchWing(u)) u.cdAlt = 4; return true; }
   if (a.kind === 'bomb' || a.kind === 'nuke') { u.bombQ = a.count; u.bombT = 0; }
   else if (a.kind === 'torpedo') {
     let yaw, ox, oz, oy;
@@ -386,6 +462,10 @@ function impact(p, hit, th) {
 function bountyOf(d) { return d.model === 'hq' ? 2000 : Math.round(Math.max(40, (d.aiCost || d.cost || 300) * 0.3) / 5) * 5; }
 function damage(u, amt, att, pl) {
   if (u.dead) return;
+  if (u.def.model === 'hq' && !hqOpen(u.team)) {
+    if (pl && time - hqMsgT > 8) { hqMsgT = time; msg(`The ${TEAM_NAME[u.team]} headquarters is out of reach. Take a point in the ${SECTORS[u.team === ALLY ? 0 : COLS - 1]} sector first.`, 'bad'); }
+    return;
+  }
   if (!pl) amt *= 0.45;            // AI gunnery is weaker than the player's: keeps the war from burning out
   u.hp -= amt;
   if (u === player) hurtFlash = 0.25;
@@ -412,7 +492,7 @@ function makeWreck(u) {
   const m = u.mesh, d = u.def; let i = 0;
   m.traverse(o => {
     if (!o.isMesh) return;
-    if (o.userData.person || o.userData.chute || o.material === PROP) { o.visible = false; return; }
+    if (o.userData.person || o.userData.chute || o.userData.decal || o.material === PROP) { o.visible = false; return; }
     o.material = WRECK_MAT[(i++) % 3];
   });
   const w = { mesh: m, def: d, t: 0, k: 0, smokeFor: rnd(25, 45), smokeT: 0, vel: u.vel.clone(), state: 'burn', spin: rnd(-2.5, 2.5), yaw: u.yaw, pitch: u.pitch, roll: u.roll, tRoll: rnd(0.25, 0.6) * (Math.random() < 0.5 ? -1 : 1), baseY: u.pos.y };
@@ -468,16 +548,16 @@ function kill(u, att, pl) {
   for (const p of u.people) scene.remove(p.mesh);
   const b = bountyOf(d);
   if (u.team === AXIS) {
-    if (pl) { money += b; stats.kills++; msg(`Destroyed ${d.name}  +$${b}`, 'gold'); }
+    if (pl) { const cr = Math.max(10, Math.round(b * 0.4 / 5) * 5); money += b; stats.kills++; stats.credits += cr; stats.killCr += cr; msg(`Destroyed ${d.name}  +$${b} · +${cr} credits`, 'gold'); }
     else teamAI[ALLY].budget += b * 0.5;
   } else {
     teamAI[AXIS].budget += b * 0.5;
     if (d.domain === 'bld') msg(`We lost a ${d.name}!`, 'bad');
   }
   const w = makeWreck(u);
-  if (d.domain === 'bld') { const pl_ = plots[u.team].find(p => p.unit === u); if (pl_) { pl_.unit = null; pl_.rubble = w; } }
+  if (d.domain === 'bld') { const pl_ = plots[u.team].find(p => p.unit === u); if (pl_) { pl_.unit = null; pl_.rubble = w; } const cp = POINTS.find(p => p.post === u); if (cp) cp.rubble = w; }
   if (u === player) playerDied(w);
-  if (d.model === 'hq') endGame(u.team === AXIS);
+  if (d.model === 'hq') endBattle(u.team === AXIS ? 'won' : 'lost');
 }
 
 // -------------------------------------------------------------- AI
@@ -489,7 +569,7 @@ function weight(d, e) {
     case 'torpedo': return ed === 'sea' ? 1 : 0;
     case 'aa': return ed === 'air' ? 3 : ed === 'land' ? 1 : ed === 'bld' ? 0.6 : 0;
     case 'infantry': case 'tank': return ed === 'land' ? 2 : ed === 'bld' ? 1.5 : ed === 'sea' ? 0.4 : 0;
-    case 'warship': return ed === 'sea' ? 2 : ed === 'land' ? 1 : ed === 'bld' ? 1 : 0;
+    case 'warship': case 'carrier': return ed === 'sea' ? 2 : ed === 'land' ? 1 : ed === 'bld' ? 1 : 0;
     case 'heli': return ed === 'land' ? 2.5 : ed === 'bld' ? 1 : ed === 'sea' ? 0.8 : 0.4;
     case 'sub': return ed === 'sea' ? 2 : 0;
   }
@@ -503,6 +583,7 @@ function pickTarget(u) {
   for (const e of units) {
     if (e.team === u.team) continue;
     let w = weight(d, e); if (w <= 0) continue;
+    if (e.def.model === 'hq' && !hqOpen(e.team)) continue;
     const dist = u.pos.distanceTo(e.pos); if (dist > sight) continue;
     if (e.def.sub && e.dive > 0.5 && (!(d.asw || d.sub || d.role === 'torpedo') || dist > 450)) continue;   // only sonar finds a dived sub
     if (d.sub && NONCOMBAT[e.def.role]) w *= 2;
@@ -538,23 +619,24 @@ function setBreak(u, t, dist, alt, jink) {
   u.breakPt.set(u.pos.x + Math.sin(y) * dist, alt, u.pos.z + Math.cos(y) * dist);
 }
 function patrolPoint(u) {
-  const d = u.def, s = u.team === ALLY ? 1 : -1;
-  if (d.role === 'torpedo') return V().set(rnd(-MAP.x * 0.6, MAP.x * 0.6), 100, rnd(250, MAP.z * 0.8));
-  if (d.role === 'bomber') return V().set(BASE[u.team].x + rnd(-300, 300), 190, BASE[u.team].z + rnd(-250, 300));
-  return V().set(rnd(-MAP.x * 0.45, MAP.x * 0.45) + s * 200, rnd(110, 200), rnd(-MAP.z * 0.7, MAP.z * 0.45));
+  const d = u.def, s = u.team === ALLY ? 1 : -1, lim = MAP.x * 0.92;
+  if (d.role === 'torpedo') return V().set(clamp(frontX(SEA_LANE) + rnd(-1100, 1100), -lim, lim), 100, rnd(500, 2300));
+  const lane = Math.floor(Math.random() * LANES);
+  if (d.role === 'bomber') { const sp = stage(u.team, lane); return V().set(sp.x + rnd(-300, 300), 190, sp.z + rnd(-300, 300)); }
+  return V().set(clamp(frontX(lane) + rnd(-700, 700) - s * 150, -lim, lim), rnd(110, 200), LANE[lane].z + rnd(-500, 500));
 }
 function aiAir(u, dt) {
   const d = u.def, t = u.target, g = T1, gr = ground(u.pos.x, u.pos.z);
   if (d.role === 'cargo') {            // supply run: airport <-> far rear depot
     if (!u.route) {
       const ap = AIRPORT[u.team], s = u.team === ALLY ? 1 : -1;
-      u.route = { i: 1, loaded: false, pts: [V().set(ap.x, 80, ap.z), V().set(-s * (MAP.x - 150), 210, MAP.z - rnd(150, 400))] };
+      u.route = { i: 1, loaded: false, pts: [V().set(ap.x, 80, ap.z), V().set(ap.x + s * rnd(0, 400), 210, ap.z + rnd(2700, 3100))] };
     }
     const r = u.route, p = r.pts[r.i]; g.copy(p);
     if (hdist(u.pos, p) < 90) { if (r.i === 0 && r.loaded) { deliver(u); r.loaded = false; } if (r.i === 1) r.loaded = true; r.i = 1 - r.i; }
   } else if (d.role === 'airlift') {
     if (u.cargo) { g.copy(u.dropPt); if (hdist(u.pos, u.dropPt) < 70) paradrop(u); }
-    else { g.copy(u.exitPt); if (Math.abs(u.pos.x) > MAP.x + 110) { despawn(u); return; } }
+    else { g.copy(u.exitPt); if (hdist(u.pos, u.exitPt) < 220) { despawn(u); return; } }
   }
   else if (u.breakT > 0) { u.breakT -= dt; g.copy(u.breakPt); }
   else if (!t || (d.role === 'torpedo' && u.cdAlt > 0)) {
@@ -613,7 +695,12 @@ function aiLand(u, dt) {
     const r = u.route, p = r.pts[r.i]; gx = p.x; gz = p.z; stop = 0;
     if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 35) { if (r.i === 0 && r.loaded) { deliver(u); r.loaded = false; } if (r.i === 1) r.loaded = true; r.i = 1 - r.i; }
   }
-  else { const b = BASE[1 - u.team]; gx = b.x; gz = b.z + (u.id % 5 - 2) * 30; stop = 60; }
+  else {                               // advance on this lane's objective and hold it; with the lane won, go for the headquarters
+    if (u.lane === undefined) u.lane = Math.abs(u.pos.z - LANE[0].z) < Math.abs(u.pos.z - LANE[1].z) ? 0 : 1;
+    const o = reach(u.team, u.lane);
+    if (o) { gx = o.x + (u.id % 5 - 2) * 30; gz = o.z + ((u.id >> 2) % 5 - 2) * 30; stop = 20; }
+    else { const b = BASE[1 - u.team]; gx = b.x; gz = b.z + (u.id % 5 - 2) * 30; stop = 60; }
+  }
   const dist = Math.hypot(gx - u.pos.x, gz - u.pos.z);
   let want = Math.atan2(gx - u.pos.x, gz - u.pos.z);
   if (terrainH(u.pos.x + Math.sin(u.yaw) * 25, u.pos.z + Math.cos(u.yaw) * 25) < World.water + 0.6) want = Math.atan2(gx > u.pos.x ? 0.6 : -0.6, -1);
@@ -631,10 +718,11 @@ function aiLand(u, dt) {
 function dockOf(team) { for (const u of units) if (u.def.model === 'dock' && u.team === team) return u; return null; }
 function aiSea(u, dt) {
   const d = u.def, t = u.target; let gx, gz, thr = 1;
+  if (d.role === 'carrier' && u.cdAlt <= 0 && u !== player) fireAlt(u, u.pos);
   if (d.role === 'merchant') {
     if (!u.route) {
       const b = BASE[u.team], s = u.team === ALLY ? 1 : -1;
-      u.route = { i: 1, loaded: false, pts: [{ x: b.x + s * 45, z: coastZ(b.x) + 95 }, { x: b.x + s * rnd(300, 900), z: MAP.z - rnd(120, 260) }] };
+      u.route = { i: 1, loaded: false, pts: [{ x: b.x + s * 45, z: coastZ(b.x) + 95 }, { x: b.x + s * rnd(300, 900), z: coastZ(b.x) + rnd(1300, 1600) }] };
     }
     const r = u.route, p = r.pts[r.i]; gx = p.x; gz = p.z;
     if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 55) {
@@ -646,7 +734,7 @@ function aiSea(u, dt) {
     if (u.cargo) {
       gx = u.beachX; gz = coastZ(gx) + 50;
       if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 40 || (u.aground && u.pos.z < coastZ(u.pos.x) + 130)) unload(u);
-    } else { gx = u.pos.x; gz = MAP.z + 200; if (u.pos.z > MAP.z - 90) { despawn(u); return; } }
+    } else { gx = u.pos.x; gz = u.exitZ + 300; if (u.pos.z > u.exitZ - 60) { despawn(u); return; } }
   } else if (t) {
     const dist = u.pos.distanceTo(t.pos), deep = t.def.sub && t.dive > 0.5;
     if (d.sub) u.diveT = 1;
@@ -655,10 +743,13 @@ function aiSea(u, dt) {
     centerOf(t, TA).addScaledVector(t.vel, dist / d.gun.vel);
     u.aimYaw = Math.atan2(TA.x - u.pos.x, TA.z - u.pos.z);
     if (dist < d.gun.range && !deep) fireGun(u, TA, 0.015);
-    if (d.alt && u.cdAlt <= 0 && t.def.domain === 'sea' && dist < 430) { TB.copy(t.pos).addScaledVector(t.vel, dist / 58 * 0.8); fireAlt(u, TB); }
+    if (d.alt && d.alt.kind === 'torpedo' && u.cdAlt <= 0 && t.def.domain === 'sea' && dist < 430) { TB.copy(t.pos).addScaledVector(t.vel, dist / 58 * 0.8); fireAlt(u, TB); }
   } else {
     if (d.sub) u.diveT = 0;
-    if (!u.patrol || hdist(u.pos, u.patrol) < 90) u.patrol = V().set(rnd(-MAP.x + 350, MAP.x - 350), 0, rnd(220, MAP.z - 200));
+    if (!u.patrol || hdist(u.pos, u.patrol) < 90) {   // hold the contested sea point; with the sea lane won, blockade the enemy port
+      const o = reach(u.team, SEA_LANE) || homeSpot(1 - u.team, true);
+      u.patrol = V().set(o.x + rnd(-250, 250), 0, o.z + rnd(-250, 250));
+    }
     gx = u.patrol.x; gz = u.patrol.z; u.aimYaw = u.yaw;
   }
   let want = Math.atan2(gx - u.pos.x, gz - u.pos.z);
@@ -782,23 +873,95 @@ function commander(team, dt) {
   let mobile = 0, merch = 0;
   for (const u of units) if (u.team === team && u.def.domain !== 'bld') { mobile++; if (u.def.role === 'merchant') merch++; }
   if (mobile >= UNIT_CAP) return;
-  const list = ROSTER[team], id = list[Math.floor(Math.random() * list.length)], d = DEFS[id], c = d.aiCost || d.cost;
+  const list = ROSTER[team].filter(i => Account.has(i)), id = list[Math.floor(Math.random() * list.length)], d = DEFS[id], c = d.aiCost || d.cost;
   if (d.max && units.filter(u => u.team === team && u.def === d).length >= d.max) return;
   if (c <= ai.budget) { ai.budget -= c; requisition(id, team); }
 }
 function raids(dt) {
   raidT -= dt; if (raidT > 0) return; raidT = rnd(26, 44);
-  const team = Math.random() < 0.5 ? ALLY : AXIS, s = team === ALLY ? 1 : -1;
-  if (Math.random() < 0.45) {          // level-bomber formation crossing from its own rear
-    const bid = team === ALLY ? 'b25' : 'ju88', z0 = BASE[team].z + rnd(-300, 300);
-    for (let i = 0; i < 3; i++) spawn(bid, team, -s * (MAP.x + 60 + i * 45), z0 + (i - 1) * 55, { alt: 210, raid: true });
+  const team = Math.random() < 0.5 ? ALLY : AXIS, s = team === ALLY ? 1 : -1, lim = MAP.x + 100;
+  const bid = team === ALLY ? 'b25' : 'ju88', tid = team === ALLY ? 'avenger' : 'fi167';
+  if (Math.random() < 0.45 && Account.has(bid)) {          // level-bomber formation crossing the front from its own rear
+    const lane = Math.random() < 0.5 ? 0 : 1, x0 = frontX(lane) - s * 2300, z0 = LANE[lane].z + rnd(-300, 300);
+    for (let i = 0; i < 3; i++) spawn(bid, team, clamp(x0 - s * i * 45, -lim, lim), z0 + (i - 1) * 55, { alt: 210, raid: true });
     msg(team === ALLY ? 'Allied bomber formation crossing the front!' : 'WARNING: Axis bomber formation inbound!', team === ALLY ? 'good' : 'bad');
     return;
   }
-  if (!units.some(u => u.team !== team && u.def.domain === 'sea')) return;
-  const id = team === ALLY ? 'avenger' : 'fi167', n = 2 + (Math.random() < 0.4 ? 1 : 0), x0 = -s * rnd(300, 1500);
-  for (let i = 0; i < n; i++) spawn(id, team, x0 + i * 40, MAP.z - 30 - i * 25, { alt: 110, yaw: Math.PI, raid: true });
+  if (!Account.has(tid) || !units.some(u => u.team !== team && u.def.domain === 'sea')) return;
+  const n = 2 + (Math.random() < 0.4 ? 1 : 0), x0 = clamp(frontX(SEA_LANE) - s * rnd(300, 1200), -lim, lim);
+  for (let i = 0; i < n; i++) spawn(tid, team, x0 + i * 40, 2700 - i * 25, { alt: 110, yaw: Math.PI, raid: true });
   msg(team === ALLY ? 'Allied torpedo bombers inbound from the south!' : 'WARNING: Axis torpedo bombers hunting our ships!', team === ALLY ? 'good' : 'bad');
+}
+// ---- capture points: destroy the command post, then hold the ground (or the water) to take the point
+const BEAM_GEO = new THREE.CylinderGeometry(5, 5, 320, 8, 1, true);
+function ownerHex(o) { return o < 0 ? 0xf2f0e0 : TEAM_COL[o]; }
+function setOwner(p, team) {
+  p.owner = team; p.prog = 0; p.beam.material.color.setHex(ownerHex(team));
+  for (const u of units) u.patrol = null;
+  refreshFront();
+}
+function setupPoints() {
+  for (const p of POINTS) {
+    p.y = p.sea ? 0 : terrainH(p.x, p.z);
+    p.beam = new THREE.Mesh(BEAM_GEO, new THREE.MeshBasicMaterial({ color: ownerHex(p.owner), transparent: true, opacity: 0.17, depthWrite: false, side: THREE.DoubleSide }));
+    p.beam.position.set(p.x, p.y + 175, p.z); scene.add(p.beam);
+    if (p.owner >= 0) p.post = spawn(p.sea ? 'seafort' : 'outpost', p.owner, p.x, p.z, { yaw: 0 });
+  }
+  startOwned = allyOwned(); refreshFront();
+}
+function capture(p, team, byPlayer) {
+  if (p.rubble) { scene.remove(p.rubble.mesh); const i = wrecks.indexOf(p.rubble); if (i >= 0) wrecks.splice(i, 1); p.rubble = null; }
+  setOwner(p, team);
+  p.post = spawn(p.sea ? 'seafort' : 'outpost', team, p.x, p.z, { build: true, yaw: 0 });
+  if (team === ALLY) {
+    stats.caps++;
+    if (byPlayer) { stats.credits += 250; stats.capCr += 250; money += 400; }
+    banner(p.name + ' captured', 'The front line moves east');
+    msg(`${p.name} is ours!` + (byPlayer ? '  +$400 · +250 credits' : ''), 'gold');
+  } else { banner(p.name + ' lost', 'The Axis push the front line west'); msg(`The Axis have taken ${p.name}!`, 'bad'); }
+}
+function updatePoints(dt) {
+  capT -= dt; if (capT > 0) return; capT = 0.5;
+  for (const p of POINTS) {
+    if (p.post && p.post.dead) {
+      const old = p.owner; p.post = null; setOwner(p, -1);
+      msg(old === AXIS ? `${p.name}: Axis command post destroyed. Move in and hold it!` : `${p.name}: our command post has fallen! Hold the ground or lose the sector.`, old === AXIS ? 'good' : 'bad');
+    }
+    p.contest = false;
+    if (p.post) continue;
+    const R = p.sea ? CAP_R_SEA : CAP_R, n = [0, 0]; let pl = false;
+    for (const u of units) {
+      const d = u.def;
+      if (p.sea ? (d.domain !== 'sea' || NONCOMBAT[d.role] || (d.sub && u.dive > 0.5)) : (d.domain !== 'land' || d.role === 'cargo' || u.chute > 0)) continue;
+      if (Math.abs(u.pos.x - p.x) > R || Math.hypot(u.pos.x - p.x, u.pos.z - p.z) > R) continue;
+      n[u.team]++; if (u === player) pl = true;
+    }
+    p.contest = n[0] > 0 && n[1] > 0;
+    const step = 0.5 / 28;             // one unit takes 28 s; three or more take about 9 s
+    if (n[0] && !n[1] && canCap(p, ALLY)) { p.prog += step * Math.min(n[0], 3); if (pl) p.plCap = true; }
+    else if (n[1] && !n[0] && canCap(p, AXIS)) p.prog -= step * Math.min(n[1], 3);
+    else if (!n[0] && !n[1]) p.prog -= Math.sign(p.prog) * Math.min(Math.abs(p.prog), step * 0.5);
+    if (p.prog >= 1) { capture(p, ALLY, p.plCap); p.plCap = false; }
+    else if (p.prog <= -1) { capture(p, AXIS); p.plCap = false; }
+  }
+}
+// the front line, drawn in the world as a faint curtain following the ground
+const FRONT_MAT = new THREE.MeshBasicMaterial({ color: 0xffb030, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false });
+function refreshFront() {
+  const path = frontPath(), pts = [], pos = [], H = 30;
+  for (let i = 0; i < path.length - 1; i++) {
+    const a = path[i], b = path[i + 1], n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 90));
+    for (let k = 0; k < n; k++) pts.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
+  }
+  pts.push(path[path.length - 1]);
+  for (const q of pts) q[2] = Math.max(terrainH(q[0], q[1]), 3.5) + 0.5;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    pos.push(a[0], a[2], a[1], b[0], b[2], b[1], b[0], b[2] + H, b[1], a[0], a[2], a[1], b[0], b[2] + H, b[1], a[0], a[2] + H, a[1]);
+  }
+  if (frontMesh) { scene.remove(frontMesh); frontMesh.geometry.dispose(); }
+  const geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  frontMesh = new THREE.Mesh(geo, FRONT_MAT); frontMesh.frustumCulled = false; scene.add(frontMesh);
 }
 const GRIPES = [
   'Sailor: "My socks are wet. Again."', 'Gunner: "Can\'t see a thing through this rain, sir."', 'Loader: "Shells keep slipping out of my hands!"',
@@ -883,8 +1046,8 @@ function playerControl(dt) {
 }
 function updateCamera(dt) {
   if (state === 'menu') {
-    const a = performance.now() * 0.00006; camera.position.set(BASE[0].x + Math.sin(a) * 330, 120, BASE[0].z + 160 + Math.cos(a) * 330);
-    camera.lookAt(BASE[0].x, 10, BASE[0].z + 160); return;
+    const a = performance.now() * 0.00006, q = PT(selCol, 1); camera.position.set(q.x + Math.sin(a) * 380, q.y + 150, q.z + Math.cos(a) * 380);
+    camera.lookAt(q.x, q.y + 10, q.z); return;
   }
   if (!focusMesh) return;
   const d = focusDef; fov += ((input.zoom ? 17 : 60) - fov) * Math.min(1, dt * 10);
@@ -903,7 +1066,7 @@ function statLine(d) {
   return `${d.hp} HP · speed ${d.speed}` + (d.gun ? ` · gun ${d.gun.dmg}` : '') + (d.alt ? ` · ${d.alt.label}` : '') + (d.pay ? ` · pays $${d.pay} a trip` : '');
 }
 function renderShop() {
-  $('shopMoney').textContent = '$' + Math.floor(money);
+  $('shopMoney').textContent = '$' + Math.floor(money).toLocaleString();
   const tabs = $('tabs'); tabs.innerHTML = '';
   for (const t of Object.keys(SHOP)) {
     const b = document.createElement('button'); b.className = 'tab' + (t === shopTab ? ' on' : ''); b.textContent = t;
@@ -912,12 +1075,14 @@ function renderShop() {
   const box = $('shopCards'); box.innerHTML = '';
   const mobile = units.filter(u => u.team === ALLY && u.def.domain !== 'bld').length;
   for (const id of SHOP[shopTab]) {
-    const d = DEFS[id], isB = d.domain === 'bld', nc = NONCOMBAT[d.role], own = unlocked.has(id);
+    const d = DEFS[id], isB = d.domain === 'bld', nc = NONCOMBAT[d.role], own = isB || nc || Account.has(id);
     const full = isB ? !plots[ALLY].some(p => !p.unit) : mobile >= UNIT_CAP + 8;
-    const can = money >= d.cost && !full;
-    const c = document.createElement('div'); c.className = 'card' + (can || own ? '' : ' no'); c.style.cursor = 'default';
-    c.innerHTML = `<div class="k">${isB ? 'Building' : d.heli ? 'helicopter' : d.role}</div><div class="t"></div><div class="d"></div><div class="s"></div><div class="p">${own ? 'UNLOCKED' : '$' + d.cost.toLocaleString()}</div><div class="row"></div>`;
-    c.querySelector('.t').textContent = d.name; c.querySelector('.d').textContent = full && !own ? (isB ? 'No free building plots.' : 'Force limit reached.') : d.desc; c.querySelector('.s').textContent = statLine(d);
+    const can = own && money >= d.cost && !full;
+    const c = document.createElement('div'); c.className = 'card' + (own && (can || (!isB && !nc)) ? '' : ' no'); c.style.cursor = 'default';
+    const price = isB || nc ? '$' + d.cost.toLocaleString() : `TIER ${d.tier} · ${own ? 'UNLOCKED' : 'LOCKED'}`;
+    c.innerHTML = `<div class="k">${isB ? 'Building' : d.heli ? 'helicopter' : d.role}</div><div class="t"></div><div class="d"></div><div class="s"></div><div class="p">${price}</div><div class="row"></div>`;
+    c.querySelector('.t').textContent = d.name; c.querySelector('.s').textContent = statLine(d);
+    c.querySelector('.d').textContent = !own ? `Unlock ${BRANCH[d.domain]} tier ${d.tier} in the Armory on the campaign map.` : full && (isB || nc) ? (isB ? 'No free building plots.' : 'Force limit reached.') : d.desc;
     const row = c.querySelector('.row');
     const mk = (label, alt, fn, on) => { const b = document.createElement('button'); b.className = 'btn' + (alt ? ' alt' : ''); b.textContent = label; b.disabled = !on; b.onclick = fn; row.append(b); };
     if (isB) mk('Build', false, () => buy(id, false), can);
@@ -925,76 +1090,138 @@ function renderShop() {
     else if (own) {
       mk(deployCd > 0 ? `Deploy in ${Math.ceil(deployCd)}s` : 'Deploy · free', false, () => buy(id, true), deployCd <= 0);
       mk('Escort $' + d.cost.toLocaleString(), true, () => buy(id, false), can);
-    } else { mk('Buy & command', false, () => buy(id, true), can); mk('Buy as escort', true, () => buy(id, false), can); }
+    }
     box.append(c);
   }
 }
-// Buying a vehicle once unlocks it for good: after that you can deploy into it (and respawn in it) for free.
-// Extra computer-flown escorts always cost the full price.
+// Every vehicle in a tier you have unlocked is free to deploy in (and respawn in). Extra computer-flown escorts,
+// supply vehicles and buildings are paid for from this battle's war chest.
 function buy(id, command) {
-  const d = DEFS[id], free = command && unlocked.has(id) && !NONCOMBAT[d.role] && d.domain !== 'bld';
-  if (!free && money < d.cost) return;
-  if (d.domain === 'bld') { const u = build(ALLY, id); if (!u) return; money -= d.cost; msg(`Construction started: ${d.name}`, 'good'); renderShop(); return; }
-  if (free) {
-    if (deployCd > 0) return;
-    const old = player, u = spawnAt(id, ALLY); u.mine = true; setPlayer(u);
-    if (old && old.mine && !old.dead) despawn(old);      // your previous personal vehicle is withdrawn
-    deployCd = 20; lastBought = id; msg(`Deployed in ${d.name}`, 'good'); toggleShop(false); return;
-  }
+  const d = DEFS[id], nc = NONCOMBAT[d.role], isB = d.domain === 'bld';
+  if (!isB && !nc && !Account.has(id)) return;
+  if (command && !isB && !nc) { deploy(id); return; }
+  if (money < d.cost) return;
+  if (isB) { const u = build(ALLY, id); if (!u) return; money -= d.cost; msg(`Construction started: ${d.name}`, 'good'); renderShop(); return; }
   money -= d.cost;
-  if (NONCOMBAT[d.role]) {
+  if (nc) {
     if (d.role === 'lander') { sealift(ALLY, d.cargo.slice()); msg(`${d.name} convoy is sailing in from the south`, 'good'); }
     else { spawnAt(id, ALLY); msg(`${d.name} has started its supply runs`, 'good'); }
     renderShop(); return;
   }
-  const first = !unlocked.has(id); unlocked.add(id); lastBought = id;
-  if (command) { const u = spawnAt(id, ALLY); u.mine = true; setPlayer(u); msg(`${d.name} unlocked: it is now free to deploy and respawn in`, 'gold'); toggleShop(false); return; }
   if (d.domain === 'land') { airlift(ALLY, [id]); msg(`${d.name} is being flown in by cargo plane`, 'good'); }
-  else { spawnAt(id, ALLY); msg(`${d.name} has joined the fight`, 'good'); }
-  if (first) msg(`${d.name} unlocked: free to deploy and respawn in`, 'gold');
+  else { spawnAt(id, ALLY, selCol); msg(`${d.name} has joined the fight`, 'good'); }
   renderShop();
 }
 function toggleShop(on) {
   if (on && state === 'playing') { state = 'shop'; $('shop').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock(); input.fire = false; input.zoom = false; renderShop(); }
   else if (!on && state === 'shop') { state = 'playing'; $('shop').classList.remove('on'); }
 }
-function renderStarters(ids, defId) {
+// ---- campaign map: shown before the battle, after losing a vehicle, and on M (paused)
+function frontCol() { let c = 0; for (const p of POINTS) if (p.owner === ALLY) c = Math.max(c, p.col); return c; }
+function canDeployIn(c) { return c === 0 || POINTS.some(p => p.col === c && p.owner === ALLY); }
+function openMenu() {
+  if (!canDeployIn(selCol)) selCol = frontCol();
+  $('menu').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock(); input.fire = false; input.zoom = false; renderMenu();
+}
+function toggleMap(on) {
+  if (on && state === 'playing') { state = 'map'; openMenu(); }
+  else if (!on && state === 'map') { state = 'playing'; $('menu').classList.remove('on'); }
+}
+function renderMenu() {
+  const a = Account.data, mode = state;
+  $('menuTitle').textContent = mode === 'dead' ? 'Vehicle lost' : mode === 'map' ? 'Campaign map' : 'Frontline 1944';
+  $('menuSub').textContent = mode === 'dead' ? 'The wreck stays where it fell. Pick a sector on the map and a vehicle to rejoin the battle.'
+    : mode === 'map' ? 'The battle is paused. Redeploy to another sector, visit the Armory, or end the operation and bank your credits.'
+      : 'Push the front line east, sector by sector, until the Axis headquarters falls. Click a sector on the map, then choose a vehicle.';
+  $('acct').innerHTML = `<b>${a.credits.toLocaleString()}</b> credits` + (mode !== 'menu' ? ` <i>+${stats.credits.toLocaleString()} this battle</i>` : '') + `<small>${a.battles} battles · ${a.wins} won · ${a.kills} kills · ${a.campaigns} campaigns won</small>`;
+  const held = POINTS.filter(p => p.col === selCol && p.owner === ALLY).length;
+  $('sectorInfo').innerHTML = `Deploying in the <b>${SECTORS[selCol]}</b> sector · ${held} of ${LANES} points held` + (selCol === frontCol() ? ' · front line' : '') + (selCol === 0 ? ' · home runway' : '');
+  const tabs = $('menuTabs'); tabs.innerHTML = '';
+  for (const t of ['Deploy', 'Armory']) {
+    const b = document.createElement('button'); b.className = 'tab' + (t === menuTab ? ' on' : ''); b.textContent = t;
+    b.onclick = () => { menuTab = t; renderMenu(); }; tabs.append(b);
+  }
+  $('starters').style.display = menuTab === 'Deploy' ? '' : 'none'; $('armory').style.display = menuTab === 'Armory' ? '' : 'none';
+  if (menuTab === 'Deploy') renderStarters(); else renderArmory();
+  const row = $('menuBtns'); row.innerHTML = '';
+  const mk = (label, alt, fn) => { const b = document.createElement('button'); b.className = 'btn' + (alt ? ' alt' : ''); b.textContent = label; b.onclick = fn; row.append(b); };
+  if (mode === 'map') mk('Back to battle', false, () => toggleMap(false));
+  if (mode !== 'menu') mk('End operation and bank credits', true, () => endBattle());
+}
+function renderStarters() {
   const box = $('starters'); box.innerHTML = '';
-  const kind = { air: 'Air', land: 'Land', sea: 'Sea' };
-  for (const id of ids || STARTERS) {
-    const d = DEFS[id], c = document.createElement('button'); c.className = 'card' + (id === defId ? ' def' : '');
-    c.innerHTML = `<div class="k">${kind[d.domain]}${id === defId ? ' · default · press Enter' : ''}</div><div class="t"></div><div class="d"></div><div class="s"></div>`;
-    c.querySelector('.t').textContent = d.name; c.querySelector('.d').textContent = d.desc; c.querySelector('.s').textContent = statLine(d);
-    c.onclick = () => startAs(id); box.append(c);
+  const ids = SHOP.Air.concat(SHOP.Land, SHOP.Sea).filter(id => !NONCOMBAT[DEFS[id].role] && Account.has(id));
+  if (!ids.includes(lastBought)) lastBought = ids[0];
+  const wait = state === 'map' && deployCd > 0;
+  for (const id of ids) {
+    const d = DEFS[id], c = document.createElement('button'); c.className = 'card' + (id === lastBought ? ' def' : '') + (wait ? ' no' : '');
+    c.innerHTML = `<div class="k">${BRANCH[d.domain]} · tier ${d.tier}${id === lastBought && state === 'dead' ? ' · press Enter' : ''}</div><div class="t"></div><div class="d"></div><div class="s"></div>`;
+    c.querySelector('.t').textContent = d.name; c.querySelector('.d').textContent = wait ? `Redeploy available in ${Math.ceil(deployCd)}s.` : d.desc; c.querySelector('.s').textContent = statLine(d);
+    c.onclick = () => deploy(id); box.append(c);
   }
 }
-function startAs(id) {
+function renderArmory() {
+  const box = $('armory'); box.innerHTML = '';
+  for (const br of ['air', 'land', 'sea']) {
+    const t = Account.tier(br), col = document.createElement('div'); col.className = 'arm';
+    col.innerHTML = `<div class="k">${BRANCH[br]} forces</div><div class="t">Tier ${t} of ${MAX_TIER}</div>`;
+    for (let n = 1; n <= MAX_TIER; n++) {
+      const names = SHOP[BRANCH[br]].filter(id => DEFS[id].tier === n && !NONCOMBAT[DEFS[id].role]).map(id => DEFS[id].name).join(', ');
+      const r = document.createElement('div'); r.className = 'tier ' + (n <= t ? 'have' : n === t + 1 ? 'next' : 'lock');
+      r.innerHTML = `<b>Tier ${n}${n <= t ? ' ✓' : ''}</b><span></span>`; r.querySelector('span').textContent = names;
+      if (n === t + 1) {
+        const b = document.createElement('button'); b.className = 'btn'; b.textContent = `Unlock · ${TIER_PRICE[n].toLocaleString()} credits`;
+        b.disabled = Account.data.credits < TIER_PRICE[n]; b.onclick = () => { if (Account.unlock(br)) renderMenu(); }; r.append(b);
+      }
+      col.append(r);
+    }
+    box.append(col);
+  }
+  const note = document.createElement('div'); note.className = 'note';
+  note.textContent = 'Unlocks are permanent. Credits are paid out when a battle ends. The Axis field the same tiers you have unlocked, so the war escalates with you.';
+  box.append(note);
+}
+// take command of a vehicle in the selected sector: free in any unlocked tier
+function deploy(id) {
+  if (!Account.has(id) || NONCOMBAT[DEFS[id].role] || state === 'over') return;
+  const first = state === 'menu', redeploy = state === 'map' || state === 'shop';
+  if (redeploy && deployCd > 0) return;
   initAudio();
-  const first = state === 'menu';
-  const u = spawnAt(id, ALLY); u.mine = true; setPlayer(u); lastBought = id;
-  state = 'playing'; $('menu').classList.remove('on'); $('hud').style.display = 'block';
-  if (first) { const s = World.info; banner(s.name, s.desc); }
-  const cv = renderer.domElement; if (cv.requestPointerLock) { try { const r = cv.requestPointerLock(); if (r && r.catch) r.catch(() => { }); } catch (e) { } }
+  const old = player, u = spawnAt(id, ALLY, selCol); u.mine = true; setPlayer(u); lastBought = id;
+  if (old && old.mine && !old.dead) despawn(old);        // your previous personal vehicle is withdrawn
+  if (redeploy) deployCd = 20;
+  state = 'playing'; $('menu').classList.remove('on'); $('shop').classList.remove('on'); $('hud').style.display = 'block';
+  if (first) { const s = World.info; banner(SECTORS[selCol] + ' sector', `${s.name}. ${s.desc}`); } else msg(`Deployed in ${DEFS[id].name}, ${SECTORS[selCol]} sector`, 'good');
+  const cv = renderer.domElement; if (!touchMode && cv.requestPointerLock) { try { const r = cv.requestPointerLock(); if (r && r.catch) r.catch(() => { }); } catch (e) { } }
 }
-function showRespawn() {
-  $('menuTitle').textContent = 'Vehicle lost'; $('menuTitle').style.fontSize = '40px';
-  $('menuSub').textContent = 'The wreck stays where it fell. Respawn free in any vehicle you have unlocked. Your last purchase is the default.';
-  renderStarters([lastBought].concat([...unlocked].filter(id => id !== lastBought)), lastBought);
-  $('menu').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock();
-}
-function endGame(win) {
+const startAs = deploy;
+function showRespawn() { openMenu(); }
+// A battle ends when the clock runs out, when you end the operation, or when a headquarters falls ('won' / 'lost').
+// Credits are banked here; the state of the front is saved so the next battle carries on from it.
+function endBattle(result) {
   if (state === 'over') return; state = 'over';
-  $('menu').classList.remove('on'); $('shop').classList.remove('on');
-  $('overTitle').textContent = win ? 'Victory' : 'Defeat';
-  $('overSub').textContent = (win ? 'The Axis headquarters is rubble. ' : 'Allied headquarters has fallen. ') + `You destroyed ${stats.kills} enemies and ${stats.defect} ships defected to your side.`;
-  setTimeout(() => { $('over').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock(); }, 2500);
+  $('menu').classList.remove('on'); $('shop').classList.remove('on'); if (document.exitPointerLock) document.exitPointerLock();
+  const gain = allyOwned() - startOwned, win = result === 'won' || (!result && gain > 0);
+  const rows = [[`Enemies destroyed (${stats.kills})`, stats.killCr], [`Points captured in person (${stats.capCr / 250})`, stats.capCr], ['Battle pay', 300]];
+  if (gain > 0) rows.push([`Front line advanced (${gain} point${gain > 1 ? 's' : ''})`, gain * 150]);
+  if (result === 'won') rows.push(['Campaign victory', 3000]);
+  const total = rows.reduce((t, r) => t + r[1], 0);
+  Account.reward({ credits: total, kills: stats.kills, win, campaignWon: result === 'won', owners: result ? null : POINTS.map(p => p.owner) });
+  $('overTitle').textContent = result === 'won' ? 'Campaign won' : result === 'lost' ? 'Campaign lost' : gain > 0 ? 'Ground gained' : gain < 0 ? 'Ground lost' : 'Stalemate';
+  $('overSub').textContent = result === 'won' ? 'The Axis headquarters is rubble. A new campaign begins, and you keep everything you have unlocked.'
+    : result === 'lost' ? 'Allied headquarters has fallen. The campaign starts over, but your unlocks and credits are safe.'
+      : `The operation is over. The Allies hold ${allyOwned()} of ${POINTS.length} points; the front stays where you left it for the next battle.`;
+  const box = $('overRows'); box.innerHTML = '';
+  for (const r of rows.concat([['Credits earned', total], ['Credits in the bank', Account.data.credits]])) {
+    const a = document.createElement('span'), b = document.createElement('b'); a.textContent = r[0]; b.textContent = (r[0] === 'Credits in the bank' ? '' : '+') + r[1].toLocaleString(); box.append(a, b);
+  }
+  setTimeout(() => $('over').classList.add('on'), result ? 2500 : 500);
 }
-
 // -------------------------------------------------------------- HUD
 let ovCtx, miniCtx, miniBg;
 function drawOverlay() {
   const cv = $('ov'), w = cv.width, h = cv.height, c = ovCtx; c.clearRect(0, 0, w, h);
-  if (state !== 'playing' && state !== 'dead') return;
+  if (state !== 'playing' && state !== 'dead') { zoomTarget = null; return; }
   zoomTarget = null;
   if (input.zoom && player) zoomTarget = nearestToReticle(0.1);
   for (const u of units) {
@@ -1015,6 +1242,18 @@ function drawOverlay() {
       c.fillStyle = en ? '#ff5a4d' : '#7fd66a'; c.fillRect(sx - bw / 2, sy - s - 8, bw * clamp(u.hp / u.maxHp, 0, 1), 4);
     }
   }
+  c.font = '700 11px "Trebuchet MS",sans-serif'; c.textAlign = 'center';
+  for (const p of POINTS) {                // capture point markers
+    T1.set(p.x, p.y + 75, p.z); const dist = T1.distanceTo(camera.position); if (dist > 5200) continue;
+    T1.project(camera); if (T1.z > 1 || Math.abs(T1.x) > 1 || Math.abs(T1.y) > 1) continue;
+    const sx = (T1.x + 1) / 2 * w, sy = (1 - T1.y) / 2 * h;
+    c.fillStyle = p.owner < 0 ? '#f2f0e0' : p.owner === ALLY ? '#5b93ff' : '#ff5a4d'; c.strokeStyle = 'rgba(0,0,0,.7)'; c.lineWidth = 1.5;
+    c.beginPath(); c.moveTo(sx - 5, sy - 12); c.lineTo(sx + 9, sy - 7); c.lineTo(sx - 5, sy - 2); c.closePath(); c.fill(); c.stroke();
+    c.beginPath(); c.moveTo(sx - 5, sy - 13); c.lineTo(sx - 5, sy + 4); c.stroke();
+    const label = p.name + ' · ' + (dist * 3 > 5000 ? (dist * 3 / 5280).toFixed(1) + ' mi' : Math.round(dist * 3 / 10) * 10 + ' ft');
+    c.lineWidth = 3; c.strokeText(label, sx, sy + 17); c.fillStyle = '#f4f1e2'; c.fillText(label, sx, sy + 17);
+    if (p.prog) { const bw = 46; c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(sx - bw / 2, sy + 22, bw, 5); c.fillStyle = p.prog > 0 ? '#5b93ff' : '#ff5a4d'; c.fillRect(sx - bw / 2, sy + 22, bw * Math.min(1, Math.abs(p.prog)), 5); }
+  }
   if (state === 'playing') {
     const cx = w / 2, cy = h / 2, r = input.zoom ? 26 : 14;
     c.strokeStyle = 'rgba(0,0,0,.55)'; c.lineWidth = 4; ret(c, cx, cy, r); c.strokeStyle = zoomTarget ? '#ff7a6a' : '#f2c14e'; c.lineWidth = 1.8; ret(c, cx, cy, r);
@@ -1028,36 +1267,93 @@ function ret(c, x, y, r) {
   c.moveTo(x - r - 8, y); c.lineTo(x - r * 0.45, y); c.moveTo(x + r * 0.45, y); c.lineTo(x + r + 8, y);
   c.moveTo(x, y - r - 8); c.lineTo(x, y - r * 0.45); c.moveTo(x, y + r * 0.45); c.lineTo(x, y + r + 8); c.stroke();
 }
-function drawMini() {
-  const cv = $('mini'), w = cv.width, h = cv.height, c = miniCtx;
-  if (!miniBg) {
-    miniBg = document.createElement('canvas'); miniBg.width = w; miniBg.height = h; const b = miniBg.getContext('2d');
-    for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
-      const t = terrainH((x / w * 2 - 1) * MAP.x, (y / h * 2 - 1) * MAP.z);
-      b.fillStyle = t > 0.5 ? '#46663a' : t > -3 ? '#8a8560' : '#17405a'; b.fillRect(x, y, 2, 2);
-    }
+// shared map drawing: a pre-rendered picture of the whole theatre, the front line, capture points and units
+let mapBgCv = null, campCtx = null;
+function mapBg() {
+  if (mapBgCv) return mapBgCv;
+  const w = 1400, h = 600; mapBgCv = document.createElement('canvas'); mapBgCv.width = w; mapBgCv.height = h; const b = mapBgCv.getContext('2d');
+  for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
+    const t = terrainH((x / w * 2 - 1) * MAP.x, (y / h * 2 - 1) * MAP.z);
+    b.fillStyle = t > 9 ? '#4f6b3c' : t > 0.5 ? '#46663a' : t > -3 ? '#8a8560' : t > -14 ? '#1c4a66' : '#17405a'; b.fillRect(x, y, 2, 2);
   }
-  c.drawImage(miniBg, 0, 0);
-  const X = x => (x / MAP.x + 1) / 2 * w, Z = z => (z / MAP.z + 1) / 2 * h;
-  c.fillStyle = 'rgba(20,20,20,.8)'; for (const k of wrecks) c.fillRect(X(k.mesh.position.x) - 1, Z(k.mesh.position.z) - 1, 2, 2);
-  c.fillStyle = '#fff'; for (const b of World.icebergs) if (b.k > 0.3) { c.beginPath(); c.arc(X(b.x), Z(b.z), 2, 0, 6.3); c.fill(); }
+  return mapBgCv;
+}
+function drawFrontLine(c, X, Z, lw) {
+  const path = frontPath();
+  c.beginPath(); path.forEach((q, i) => c[i ? 'lineTo' : 'moveTo'](X(q[0]), Z(q[1])));
+  c.lineJoin = 'round'; c.strokeStyle = 'rgba(0,0,0,.65)'; c.lineWidth = lw + 2; c.stroke();
+  c.setLineDash([7, 5]); c.strokeStyle = '#ffd24a'; c.lineWidth = lw; c.stroke(); c.setLineDash([]);
+}
+function drawPointDots(c, X, Z, r, names) {
+  for (const p of POINTS) {
+    const x = X(p.x), z = Z(p.z);
+    c.beginPath(); c.arc(x, z, r, 0, 6.3); c.fillStyle = p.owner < 0 ? '#f2f0e0' : p.owner === ALLY ? '#3f7dff' : '#f04a3c'; c.fill();
+    c.lineWidth = 1.5; c.strokeStyle = p.contest ? '#ffd24a' : '#101010'; c.stroke();
+    if (p.prog) { c.beginPath(); c.arc(x, z, r + 3, -Math.PI / 2, -Math.PI / 2 + Math.abs(p.prog) * 6.283); c.strokeStyle = p.prog > 0 ? '#9fc0ff' : '#ff9a8a'; c.lineWidth = 2.5; c.stroke(); }
+    if (names) { c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.75)'; c.strokeText(p.name, x, z + r + 13); c.fillStyle = '#f4f1e2'; c.fillText(p.name, x, z + r + 13); }
+  }
+}
+function drawUnitDots(c, X, Z, k) {
   const fogR = 1500 * World.vis;
   for (const u of units) {
-    if (u === player) continue;
+    if (u === player || u.def.model === 'outpost' || u.def.model === 'seafort') continue;
     if (u.team === AXIS && World.vis < 0.6 && focusMesh && hdist(u.pos, focusMesh.position) > fogR && u.def.domain !== 'bld') continue;
     if (u.team === AXIS && u.def.sub && u.dive > 0.5 && focusMesh && hdist(u.pos, focusMesh.position) > 450) continue;
-    c.fillStyle = u.team === ALLY ? '#6aa0ff' : '#ff5a4d';
+    c.fillStyle = u.team === ALLY ? '#8fb8ff' : '#ff8a7a';
     const x = X(u.pos.x), z = Z(u.pos.z);
-    if (u.def.model === 'airport') c.fillRect(x - 9, z + 1, 18, 2);
-    if (u.def.domain === 'bld') c.fillRect(x - 2, z - 2, u.def.model === 'hq' ? 6 : 4, u.def.model === 'hq' ? 6 : 4);
-    else if (u.def.domain === 'air') { c.beginPath(); c.moveTo(x, z - 3); c.lineTo(x + 3, z + 2); c.lineTo(x - 3, z + 2); c.fill(); }
-    else { c.beginPath(); c.arc(x, z, u.def.domain === 'sea' ? 3 : 2, 0, 6.3); c.fill(); }
+    if (u.def.model === 'airport') c.fillRect(x - 9 * k, z + 1, 18 * k, 2);
+    if (u.def.domain === 'bld') { const q = (u.def.model === 'hq' ? 7 : 4) * k; c.fillRect(x - q / 2, z - q / 2, q, q); }
+    else if (u.def.domain === 'air') { c.beginPath(); c.moveTo(x, z - 3 * k); c.lineTo(x + 3 * k, z + 2 * k); c.lineTo(x - 3 * k, z + 2 * k); c.fill(); }
+    else { c.beginPath(); c.arc(x, z, (u.def.domain === 'sea' ? 3 : 2) * k, 0, 6.3); c.fill(); }
   }
+}
+// the corner map shows the ground around you; M opens the whole campaign
+function drawMini() {
+  const cv = $('mini'), w = cv.width, h = cv.height, c = miniCtx, bg = mapBg();
+  const span = 1500, spanZ = span * h / w, f = focusMesh ? focusMesh.position : PT(selCol, 1);
+  const cx = clamp(f.x, -MAP.x + span, MAP.x - span), cz = clamp(f.z, -MAP.z + spanZ, MAP.z - spanZ);
+  const kx = bg.width / (2 * MAP.x), kz = bg.height / (2 * MAP.z);
+  c.drawImage(bg, (cx - span + MAP.x) * kx, (cz - spanZ + MAP.z) * kz, 2 * span * kx, 2 * spanZ * kz, 0, 0, w, h);
+  const X = x => (x - cx + span) / (2 * span) * w, Z = z => (z - cz + spanZ) / (2 * spanZ) * h;
+  c.fillStyle = 'rgba(20,20,20,.8)'; for (const k of wrecks) c.fillRect(X(k.mesh.position.x) - 1, Z(k.mesh.position.z) - 1, 2, 2);
+  c.fillStyle = '#fff'; for (const b of World.icebergs) if (b.k > 0.3) { c.beginPath(); c.arc(X(b.x), Z(b.z), 2, 0, 6.3); c.fill(); }
+  drawFrontLine(c, X, Z, 1.5);
+  c.font = '700 9px "Trebuchet MS",sans-serif'; c.textAlign = 'center';
+  drawPointDots(c, X, Z, 5, true); drawUnitDots(c, X, Z, 1);
   if (focusMesh) {
     const p = focusMesh.position, x = X(p.x), z = Z(p.z);
     c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.beginPath(); c.arc(x, z, 4, 0, 6.3); c.stroke();
     c.beginPath(); c.moveTo(x, z); c.lineTo(x + Math.sin(camYaw) * 12, z + Math.cos(camYaw) * 12); c.stroke();
   }
+}
+function drawCamp() {
+  const cv = $('camp'), w = cv.width, h = cv.height, c = campCtx, X = x => (x / MAP.x + 1) / 2 * w, Z = z => (z / MAP.z + 1) / 2 * h;
+  c.drawImage(mapBg(), 0, 0, w, h);
+  const path = frontPath();
+  for (const side of [0, 1]) {             // territory wash: Allied west of the front, Axis east of it
+    c.beginPath(); c.moveTo(side ? w : 0, 0); for (const q of path) c.lineTo(X(q[0]), Z(q[1])); c.lineTo(side ? w : 0, h); c.closePath();
+    c.fillStyle = side ? 'rgba(255,60,40,.17)' : 'rgba(60,120,255,.17)'; c.fill();
+  }
+  const cw = X(1750) - X(0);
+  c.font = '700 13px "Trebuchet MS",sans-serif'; c.textAlign = 'center';
+  for (let i = 0; i < COLS; i++) {
+    const x0 = X((i - 3.5) * 1750), ok = canDeployIn(i);
+    if (i === selCol) { c.fillStyle = 'rgba(242,193,78,.16)'; c.fillRect(x0, 0, cw, h); c.strokeStyle = '#f2c14e'; c.lineWidth = 2; c.strokeRect(x0 + 1, 1, cw - 2, h - 2); }
+    else { c.fillStyle = 'rgba(255,255,255,.09)'; c.fillRect(x0, 0, 1, h); }
+    c.fillStyle = i === selCol ? '#f2c14e' : ok ? '#f4f1e2' : 'rgba(244,241,226,.5)'; c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.7)';
+    c.strokeText(SECTORS[i].toUpperCase(), x0 + cw / 2, 18); c.fillText(SECTORS[i].toUpperCase(), x0 + cw / 2, 18);
+  }
+  drawFrontLine(c, X, Z, 2.5);
+  c.font = '700 11px "Trebuchet MS",sans-serif';
+  for (const team of [ALLY, AXIS]) {
+    const b = BASE[team], x = X(b.x - (team === ALLY ? 1 : -1) * 170), z = Z(b.z);
+    c.fillStyle = team === ALLY ? '#3f7dff' : '#f04a3c'; c.strokeStyle = '#101010'; c.lineWidth = 1.5; c.fillRect(x - 8, z - 8, 16, 16); c.strokeRect(x - 8, z - 8, 16, 16);
+    c.fillStyle = '#fff'; c.fillText('HQ', x, z + 4);
+    c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.75)'; c.strokeText(TEAM_NAME[team] + ' HQ', x + (team === ALLY ? 12 : -12), z + 24); c.fillStyle = '#f4f1e2'; c.fillText(TEAM_NAME[team] + ' HQ', x + (team === ALLY ? 12 : -12), z + 24);
+  }
+  if (state !== 'menu') drawUnitDots(c, X, Z, 0.8);
+  drawPointDots(c, X, Z, 8, true);
+  if (state !== 'menu' && focusMesh) { const p = focusMesh.position; c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(X(p.x), Z(p.z), 6, 0, 6.3); c.stroke(); }
 }
 function updateHUD(dt) {
   if (hurtFlash > 0) hurtFlash -= dt;
@@ -1065,6 +1361,8 @@ function updateHUD(dt) {
   hudT -= dt; if (hudT > 0) return; hudT = 0.12;
   if (touchMode) $('tZoom').classList.toggle('on', input.zoom);
   $('money').textContent = '$' + Math.floor(money).toLocaleString();
+  const bt = Math.max(0, Math.ceil(battleT));
+  $('battle').textContent = `Operation ends in ${Math.floor(bt / 60)}:${('0' + bt % 60).slice(-2)} · +${stats.credits.toLocaleString()} credits`;
   const inc = incomeOf(ALLY);
   $('income').textContent = `+$${inc} every ${INCOME_PERIOD}s from buildings`;
   const s = World.info;
@@ -1094,6 +1392,18 @@ function updateHUD(dt) {
     if (d.gun) $('w1').style.width = clamp(1 - u.cdGun / (d.gun.rate * World.reload), 0, 1) * 100 + '%';
     if (d.alt) $('w2').style.width = clamp(1 - u.cdAlt / (d.alt.cd * World.reload), 0, 1) * 100 + '%';
   }
+  let cp = null; const capEl = $('cap');
+  if (u && state === 'playing') for (const p of POINTS) if (Math.hypot(u.pos.x - p.x, u.pos.z - p.z) < (p.sea ? CAP_R_SEA : CAP_R) + 40) cp = p;
+  if (cp) {
+    const fits = cp.sea ? u.def.domain === 'sea' : u.def.domain === 'land';
+    let txt, k = 0;
+    if (cp.post) txt = cp.owner === ALLY ? `${cp.name} · held by the Allies` : `${cp.name} · destroy the Axis command post to open it for capture`;
+    else if (!fits) txt = `${cp.name} · open: only ${cp.sea ? 'warships' : 'ground forces'} can capture it`;
+    else if (cp.contest) txt = `${cp.name} · contested! Clear the enemy out`;
+    else if (!canCap(cp, ALLY)) txt = `${cp.name} · cut off: take ${PT(cp.col - 1, cp.lane).name} first`;
+    else { txt = `Capturing ${cp.name}`; k = Math.max(0, cp.prog); }
+    capEl.style.display = 'block'; $('capTxt').textContent = txt; $('capBar').style.width = k * 100 + '%'; $('capBar').parentNode.style.display = k > 0 || txt.startsWith('Capturing') ? '' : 'none';
+  } else capEl.style.display = 'none';
   const tp = $('target');
   if (zoomTarget && !zoomTarget.dead) {
     tp.style.display = 'block'; const d = zoomTarget.def;
@@ -1105,6 +1415,7 @@ function updateHUD(dt) {
 
 // -------------------------------------------------------------- setup & loop
 function setupTeams() {
+  setupPoints();
   for (const team of [ALLY, AXIS]) {
     const b = BASE[team], s = team === ALLY ? 1 : -1;
     for (let r = 0; r < 4; r++) for (let c = 0; c < 5; c++) plots[team].push({ x: b.x + (c - 2) * 46 - s * 10, z: b.z + (r - 1.5) * 46, unit: null, rubble: null });
@@ -1114,9 +1425,11 @@ function setupTeams() {
     spawn('dock', team, b.x, coastZ(b.x) - 6, { yaw: 0 });
     spawn('airport', team, AIRPORT[team].x, AIRPORT[team].z - 45, { yaw: 0 });
     for (const id of ['factory', 'house', 'house', 'aagun', 'aagun']) build(team, id, true);
-    const ids = team === ALLY ? ['spitfire', 'spitfire', 'mustang', 'r4', 'c47', 'troops', 'troops', 'jeep', 'sherman', 'sherman', 'halftrack', 'truck', 'truck', 'ward', 'ward', 'pt', 'gato', 'atlanta', 'liberty', 'liberty']
-      : ['bf109', 'bf109', 'fw190', 'fa223', 'ju52', 'grenadier', 'grenadier', 'kubel', 'panzer4', 'panzer4', 'flakwagen', 'opel', 'opel', 'z23', 'z23', 'sboot', 'uboat', 'hipper', 'freighter', 'freighter'];
-    for (const id of ids) spawnAt(id, team);
+    const ids = team === ALLY ? ['spitfire', 'spitfire', 'mustang', 'r4', 'c47', 'troops', 'troops', 'troops', 'jeep', 'sherman', 'sherman', 'halftrack', 'truck', 'truck', 'ward', 'ward', 'pt', 'gato', 'atlanta', 'liberty', 'liberty']
+      : ['bf109', 'bf109', 'fw190', 'fa223', 'ju52', 'grenadier', 'grenadier', 'grenadier', 'kubel', 'panzer4', 'panzer4', 'flakwagen', 'opel', 'opel', 'z23', 'z23', 'sboot', 'uboat', 'hipper', 'freighter', 'freighter'];
+    // both armies are limited to the tiers the player has unlocked: anything above that is swapped for the basic type
+    const basic = team === ALLY ? { air: 'spitfire', land: 'troops', sea: 'ward' } : { air: 'bf109', land: 'grenadier', sea: 'z23' };
+    for (const id of ids) spawnAt(Account.has(id) ? id : basic[DEFS[id].domain], team);
   }
 }
 function update(dt) {
@@ -1126,6 +1439,7 @@ function update(dt) {
   separation(); icebergHits(dt);
   updateProjs(dt); updateWrecks(dt); updateFx(dt);
   commander(ALLY, dt); commander(AXIS, dt); raids(dt); economy(dt);
+  if (state !== 'over') { updatePoints(dt); battleT -= dt; if (battleT <= 0) endBattle(); }
   if (state === 'dead') { deadT -= dt; if (deadT <= 0 && !$('menu').classList.contains('on')) showRespawn(); }
 }
 let lastT = 0;
@@ -1136,6 +1450,7 @@ function loop(now) {
   updateCamera(dt); World.render(dt, camera, now / 1000);
   renderer.render(scene, camera);
   drawOverlay(); drawMini(); updateHUD(dt);
+  if ($('menu').classList.contains('on')) drawCamp();
 }
 function resize() {
   renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
@@ -1193,6 +1508,7 @@ function bindTouch() {
   tap('tZoom', () => { if (state !== 'playing') return; input.zoom = !input.zoom; if (input.zoom) snapZoom(); });
   tap('tDive', toggleDive);
   tap('tShop', () => toggleShop(true));
+  tap('tMap', () => toggleMap(true));
   tap('tSwitch', switchVehicle);
   $('shopClose').onclick = () => toggleShop(false);
   if ((window.matchMedia && matchMedia('(pointer: coarse)').matches) || /[?&]touch\b/.test(location.search)) setTouchMode();
@@ -1215,8 +1531,9 @@ function bindInput() {
   addEventListener('keydown', e => {
     if (e.code === 'Tab') { e.preventDefault(); if (!e.repeat) switchVehicle(); return; }
     if (e.code === 'KeyB' && !e.repeat) { toggleShop(state !== 'shop'); return; }
-    if (e.code === 'Escape') { toggleShop(false); return; }
-    if (e.code === 'Enter' && state === 'dead' && $('menu').classList.contains('on')) { startAs(lastBought); return; }
+    if (e.code === 'KeyM' && !e.repeat) { toggleMap(state !== 'map'); return; }
+    if (e.code === 'Escape') { toggleShop(false); toggleMap(false); return; }
+    if (e.code === 'Enter' && state === 'dead' && $('menu').classList.contains('on')) { deploy(lastBought); return; }
     if (e.code === 'KeyC' && !e.repeat) toggleDive();
     if (e.code === 'Space') e.preventDefault();
     input.keys[e.code] = true;
@@ -1229,12 +1546,20 @@ function init() {
   renderer = new THREE.WebGLRenderer({ canvas: $('c'), antialias: true });
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
   scene = new THREE.Scene(); camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 11000);
-  ovCtx = $('ov').getContext('2d'); miniCtx = $('mini').getContext('2d');
+  ovCtx = $('ov').getContext('2d'); miniCtx = $('mini').getContext('2d'); campCtx = $('camp').getContext('2d');
   World.init(scene);
   World.onSeason = s => { banner(s.name, s.desc); msg(`Season change: ${s.name}. ${s.desc}.`); };
-  setupTeams(); bindInput(); bindTouch(); renderStarters(); resize();
+  setupTeams(); bindInput(); bindTouch(); resize();
+  selCol = frontCol();
+  $('camp').addEventListener('click', e => {
+    const r = e.currentTarget.getBoundingClientRect(), wx = ((e.clientX - r.left) / r.width * 2 - 1) * MAP.x, c = clamp(Math.round(wx / 1750) + 3, 0, COLS - 1);
+    if (canDeployIn(c)) { selCol = c; renderMenu(); }
+    else $('sectorInfo').innerHTML = `The <b>${SECTORS[c]}</b> sector is not in Allied hands: you can only deploy where the Allies hold a point.`;
+  });
+  $('resetLink').onclick = () => { if (confirm('Start again from scratch? Every unlock, credit and the campaign map is lost.')) { Account.reset(); location.reload(); } };
+  renderMenu();
   requestAnimationFrame(loop);
 }
 // debug / test handle
-window.G = { units, wrecks, projs, World, step(n, dt) { for (let i = 0; i < n; i++) update(dt || 0.033); }, get player() { return player; }, get money() { return money; }, set money(v) { money = v; }, get state() { return state; }, startAs, buy, toggleShop, switchVehicle, damage, kill, spawnAt, spawn, airlift, sealift, requisition, unlocked, setPlayer, get lastBought() { return lastBought; }, get deployCd() { return deployCd; }, set deployCd(v) { deployCd = v; } };
+window.G = { units, wrecks, projs, World, step(n, dt) { for (let i = 0; i < n; i++) update(dt || 0.033); }, get player() { return player; }, get money() { return money; }, set money(v) { money = v; }, get state() { return state; }, startAs, deploy, buy, toggleShop, toggleMap, switchVehicle, damage, kill, spawnAt, spawn, airlift, sealift, requisition, setPlayer, Account, POINTS, PT, capture, endBattle, reach, stage, frontX, get battleT() { return battleT; }, set battleT(v) { battleT = v; }, get selCol() { return selCol; }, set selCol(v) { selCol = v; }, stats, get lastBought() { return lastBought; }, get deployCd() { return deployCd; }, set deployCd(v) { deployCd = v; } };
 init();
