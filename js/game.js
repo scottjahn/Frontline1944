@@ -124,9 +124,16 @@ function reach(team, lane) {
   else for (let c = COLS - 1; c >= 0; c--) if (PT(c, lane).owner !== AXIS) return PT(c, lane);
   return null;
 }
-function homeSpot(team, sea) {
-  const b = BASE[team], s = team === ALLY ? 1 : -1;
-  return sea ? { x: b.x + s * 160, z: coastZ(b.x + s * 160) + 260 } : { x: b.x + s * 330, z: b.z };
+// unit vector from a place in a lane back toward that team's own rear
+function behind(team, lane, col) {
+  const N = NODE[lane], a = N[col + 1], b = N[team === ALLY ? col : col + 2], l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
+  return [(b.x - a.x) / l, (b.z - a.z) / l];
+}
+// where a side falls back to when it holds nothing in a lane. The Allies have no foothold on the Continent
+// then: their ground forces have to land at the first point in France.
+function homeSpot(team, lane) {
+  if (lane !== SEA_LANE && team === ALLY) { const p = PT(0, lane); return { x: p.x, z: p.z, lane, col: 0 }; }
+  const n = NODE[lane][team === ALLY ? 0 : COLS + 1]; return { x: n.x, z: n.z, lane, col: team === ALLY ? 0 : COLS - 1 };
 }
 // where a team musters in a lane: its foremost held point (no further forward than column `col`, if given)
 function stage(team, lane, col) {
@@ -134,23 +141,75 @@ function stage(team, lane, col) {
   let c = o ? o.col - s : (team === ALLY ? COLS - 1 : 0);
   if (col !== undefined) c = team === ALLY ? Math.min(c, col) : Math.max(c, col);
   for (; c >= 0 && c < COLS; c -= s) if (PT(c, lane).owner === team) return PT(c, lane);
-  return homeSpot(team, lane === SEA_LANE);
+  return homeSpot(team, lane);
 }
-function frontX(lane) {
+// position along a lane's chain of places; idx may be fractional (0 = Allied home ... COLS + 1 = Axis home)
+function lanePos(l, idx) {
+  const N = NODE[l], i = clamp(Math.floor(idx), 0, N.length - 2), t = idx - i;
+  return { x: lerp(N[i].x, N[i + 1].x, t), z: lerp(N[i].z, N[i + 1].z, t) };
+}
+// the front in a lane lies half way between the foremost Allied point and the foremost Axis point
+function frontIdx(lane) {
   let a = -1, b = COLS;
   for (let c = 0; c < COLS; c++) { const o = PT(c, lane).owner; if (o === ALLY) a = Math.max(a, c); else if (o === AXIS) b = Math.min(b, c); }
-  return ((a < 0 ? BASE[0].x + 500 : PT(a, lane).x) + (b >= COLS ? BASE[1].x - 500 : PT(b, lane).x)) / 2;
+  return clamp((a + b + 2) / 2, 0.5, COLS + 0.5);
 }
+function frontPos(lane) { return lanePos(lane, frontIdx(lane)); }
+// the front line as a path: from out at sea, through each lane's front, to deep inland
 function frontPath() {
-  const f0 = frontX(0), f1 = frontX(1), f2 = frontX(2);
-  return [[f0, -MAP.z], [f0, LANE[0].z], [f1, LANE[1].z], [f1, 120], [f2, 520], [f2, MAP.z]];
+  const f0 = frontPos(0), f1 = frontPos(1), f2 = frontPos(2), ext = (a, b) => { const l = Math.hypot(a.x - b.x, a.z - b.z) || 1; return [a.x + (a.x - b.x) / l * 900, a.z + (a.z - b.z) / l * 900]; };
+  return [ext(f2, f1), [f2.x, f2.z], [f1.x, f1.z], [f0.x, f0.z], ext(f0, f1)];
 }
 // a point can only be taken by the side that already holds its neighbour (or its own home edge): no leap-frogging
-function canCap(p, team) { return team === ALLY ? (p.col === 0 || PT(p.col - 1, p.lane).owner === ALLY) : (p.col === COLS - 1 || PT(p.col + 1, p.lane).owner === AXIS); }
+function canCap(p, team) {
+  if (p.eng) return team === ALLY ? (p.col === 0 || ENG[p.col - 1].owner === ALLY) : (p.col === ENG.length - 1 ? calaisHeld() : ENG[p.col + 1].owner === AXIS);
+  return team === ALLY ? (p.col === 0 || PT(p.col - 1, p.lane).owner === ALLY) : (p.col === COLS - 1 || PT(p.col + 1, p.lane).owner === AXIS);
+}
+// ---- England: the Axis can only invade while they hold Calais
+function calaisHeld() { return PT(4, 1).owner === AXIS; }
+// the next English point a side has to take (Allies work outward from home, the Axis inland from Dover); null = it holds them all
+function engObjective(team) {
+  if (team === ALLY) { for (const p of ENG) if (p.owner !== ALLY) return p; }
+  else for (let c = ENG.length - 1; c >= 0; c--) if (ENG[c].owner !== AXIS) return ENG[c];
+  return null;
+}
+// where the Allies muster in England: the last point they still hold before the fighting, or the home base
+function engStage() {
+  const o = engObjective(ALLY); if (!o) return ENG[ENG.length - 1];
+  return o.col > 0 ? ENG[o.col - 1] : { x: BASE[ALLY].x + 260, z: BASE[ALLY].z, lane: ENG_LANE, col: 0 };
+}
+function engThreat() { return ENG.some(p => p.owner !== ALLY) || units.some(u => u.team === AXIS && u.def.domain === 'land' && u.lane === ENG_LANE); }
+function beachNear(x, z) {             // downhill from a place to the nearest shore; n points inland
+  let g = 0; while (sdf(x, z) > 0 && g++ < 400) { const n = sdGrad(x, z); x -= n[0] * 10; z -= n[1] * 10; }
+  return { x, z, n: sdGrad(x, z) };
+}
+// landing craft carry Axis ground forces from Calais across the strait to the beaches below Dover
+function ferry(ids) {
+  const u = sealift(AXIS, ids, ENG[ENG.length - 1], PT(4, 1));
+  msg('WARNING: Axis landing craft are crossing from Calais to Dover!', 'bad');
+  return u;
+}
 // a headquarters can only be hurt once the enemy holds ground in its home sector
-function hqOpen(team) { const c = team === ALLY ? 0 : COLS - 1; return POINTS.some(p => p.col === c && p.owner === 1 - team); }
+function hqOpen(team) { const c = team === ALLY ? 0 : COLS - 1; return POINTS.some(p => !p.eng && p.col === c && p.owner === 1 - team) || (team === ALLY && ENG[0].owner === AXIS); }
 function allyOwned() { return POINTS.filter(p => p.owner === ALLY).length; }
-function deepZ(x, z) { let g = 0; while (terrainH(x, z) > -9 && g++ < 40) z += 40; return z; }
+// a random spot on dry land (or in deep water) between r0 and r1 from a centre, preferring the side given by bv
+function landSpot(cx, cz, r0, r1, bv) {
+  for (let i = 0; i < 30; i++) {
+    const a = rnd(0, 6.283), r = rnd(r0, r1); let dx = Math.sin(a) * r, dz = Math.cos(a) * r;
+    if (bv && i < 16 && dx * bv[0] + dz * bv[1] < 0) { dx = -dx; dz = -dz; }
+    if (sdf(cx + dx, cz + dz) > 45) return [cx + dx, cz + dz];
+  }
+  return [cx, cz];
+}
+function seaSpot(cx, cz, r0, r1, bv) {
+  for (let i = 0; i < 30; i++) {
+    const a = rnd(0, 6.283), r = rnd(r0, r1); let dx = Math.sin(a) * r, dz = Math.cos(a) * r;
+    if (bv && i < 16 && dx * bv[0] + dz * bv[1] < 0) { dx = -dx; dz = -dz; }
+    if (sdf(cx + dx, cz + dz) < -150) return [cx + dx, cz + dz];
+  }
+  return [cx, cz];
+}
+const NV = { x: 0, z: 0 };
 function carrierOf(team, near, maxD) {
   let best = null, bd = maxD;
   for (const u of units) if (u.team === team && u.def.role === 'carrier' && u !== player) { const dd = Math.hypot(u.pos.x - near.x, u.pos.z - near.z); if (dd < bd) { bd = dd; best = u; } }
@@ -179,28 +238,29 @@ function launchWing(c) {
 function spawnAt(id, team, col) {
   const d = DEFS[id], b = BASE[team], s = team === ALLY ? 1 : -1, ap = AIRPORT[team], rear = !!NONCOMBAT[d.role];
   if (d.domain === 'air') {
-    if (rear || col === (team === ALLY ? 0 : COLS - 1)) {
-      if (!airportOf(team)) return spawn(id, team, -s * (MAP.x + 80), ap.z + rnd(-200, 200), { alt: 160 + rnd(0, 40) });   // airfield lost: fly in from the rear
+    if (rear || col === -1) {             // supply flights, and anyone deploying in England, use the home runway
+      if (!airportOf(team)) return spawn(id, team, clamp(ap.x - s * 900, -MAP.x, MAP.x), ap.z + rnd(-200, 200), { alt: 160 + rnd(0, 40) });   // airfield lost: fly in from the rear
       if (d.heli) { const x = ap.x + 62 + rnd(-6, 6), z = ap.z - 29 + rnd(-6, 6); return spawn(id, team, x, z, { alt: terrainH(x, z) + 2.3 }); }
       const x = ap.x - s * 150, z = ap.z + rnd(-7, 7);
       const u = spawn(id, team, x, z, { alt: terrainH(x, z) + (d.gear || 1.5) }); u.takeoff = true; u.speed = 0; return u;
     }
     const sp = stage(team, col === undefined ? Math.floor(Math.random() * LANES) : 1, col);
     if (col !== undefined) { const c = carrierOf(team, sp, 3200); if (c) return deckLaunch(id, c, 0); }
-    const x = clamp(sp.x - s * rnd(900, 1500), -MAP.x, MAP.x), z = sp.z + rnd(-350, 350);
-    return spawn(id, team, x, z, { alt: d.heli ? ground(x, z) + 60 : 170 + rnd(0, 40) });
+    const bv = behind(team, sp.lane, sp.col), r = rnd(900, 1500);
+    const x = clamp(sp.x + bv[0] * r + rnd(-300, 300), -MAP.x, MAP.x), z = clamp(sp.z + bv[1] * r + rnd(-300, 300), -MAP.z, MAP.z);
+    return spawn(id, team, x, z, { alt: d.heli ? ground(x, z) + 60 : 170 + rnd(0, 40), yaw: Math.atan2(sp.x - x, sp.z - z) });
   }
   if (d.domain === 'land') {
-    if (rear) return spawn(id, team, b.x + s * rnd(150, 230), b.z + rnd(-130, 130));
-    let lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane, col);
-    if (col !== undefined) { const o = stage(team, 1 - lane, col); if ((o.x - sp.x) * s > 0) { sp = o; lane = 1 - lane; } }
-    let x = sp.x - s * rnd(50, 150), z = sp.z + rnd(-110, 110);
-    if (terrainH(x, z) < World.water + 1.5) { x = sp.x - s * 40; z = sp.z - 30; }
-    const u = spawn(id, team, x, z); u.lane = lane; return u;
+    if (rear) { const q = landSpot(b.x + s * 190, b.z, 0, 110); return spawn(id, team, q[0], q[1]); }
+    let lane = Math.random() < 0.5 ? 0 : 1, sp = col === -1 ? engStage() : stage(team, lane, col);
+    if (col === -1) lane = ENG_LANE;
+    else if (col !== undefined) { const o = stage(team, 1 - lane, col); if ((o.col - sp.col) * s > 0) { sp = o; lane = 1 - lane; } }
+    const bv = behind(team, sp.lane, sp.col), q = landSpot(sp.x, sp.z, 50, 160, bv);
+    const u = spawn(id, team, q[0], q[1], { yaw: Math.atan2(-bv[0], -bv[1]) }); u.lane = lane; return u;
   }
-  if (rear) { const x = b.x + s * rnd(20, 240); return spawn(id, team, x, coastZ(x) + rnd(130, 300)); }
-  const sp = stage(team, SEA_LANE, col), x = clamp(sp.x - s * rnd(120, 380), -MAP.x + 100, MAP.x - 100);
-  return spawn(id, team, x, deepZ(x, sp.z + rnd(-220, 220)));
+  if (rear) { const P = HOME[team].port, q = seaSpot(P.x, P.z, 0, 160); return spawn(id, team, q[0], q[1], { yaw: HOME[team].dockYaw }); }
+  const sp = stage(team, SEA_LANE, col), bv = behind(team, sp.lane, sp.col), q = seaSpot(sp.x, sp.z, 120, 380, bv);
+  return spawn(id, team, q[0], q[1], { yaw: Math.atan2(-bv[0], -bv[1]) });
 }
 function despawn(u) {
   u.dead = true; const i = units.indexOf(u); if (i >= 0) units.splice(i, 1);
@@ -210,10 +270,11 @@ function despawn(u) {
 const CHUTE_GEO = new THREE.SphereGeometry(7, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2);
 const CHUTE_MAT = new THREE.MeshLambertMaterial({ color: 0xf2efe2, side: THREE.DoubleSide });
 function airlift(team, ids) {
-  const s = team === ALLY ? 1 : -1, lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane);
-  const z = sp.z + rnd(-160, 160), x = sp.x - s * rnd(60, 220), lim = MAP.x + 120;
-  const u = spawn(team === ALLY ? 'c54' : 'me323', team, clamp(x - s * 1700, -lim, lim), z, { alt: 190 });
-  u.cargo = ids; u.dropLane = lane; u.dropPt = V().set(x, terrainH(x, z) + 100, z); u.exitPt = V().set(clamp(x - s * 2600, -lim, lim), 230, z + rnd(-300, 300));
+  const lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane), bv = behind(team, sp.lane, sp.col), q = landSpot(sp.x, sp.z, 60, 220, bv);
+  const cx = v => clamp(v, -MAP.x - 100, MAP.x + 100), cz = v => clamp(v, -MAP.z - 100, MAP.z + 100);
+  const u = spawn(team === ALLY ? 'c54' : 'me323', team, cx(q[0] + bv[0] * 1700), cz(q[1] + bv[1] * 1700), { alt: 190, yaw: Math.atan2(-bv[0], -bv[1]) });
+  u.cargo = ids; u.dropLane = lane; u.dropPt = V().set(q[0], terrainH(q[0], q[1]) + 100, q[1]);
+  u.exitPt = V().set(cx(q[0] + bv[0] * 2600 + rnd(-300, 300)), 230, cz(q[1] + bv[1] * 2600 + rnd(-300, 300)));
   return u;
 }
 function paradrop(u) {
@@ -226,24 +287,32 @@ function paradrop(u) {
   }
   u.cargo = null;
 }
-function sealift(team, ids) {
-  const s = team === ALLY ? 1 : -1, sp = stage(team, 1), x = clamp(sp.x - s * rnd(0, 350), -MAP.x + 200, MAP.x - 200);
-  const u = spawn(team === ALLY ? 'lst' : 'mfp', team, x, coastZ(x) + 1500, { yaw: Math.PI });
-  u.cargo = ids; u.beachX = x; u.exitZ = u.pos.z; return u;
+// to: the place to land near (default: the side's foremost coast town). from: a held port to sail from (default: in from the open sea)
+function sealift(team, ids, to, from) {
+  const b = beachNear((to || stage(team, 1)).x, (to || stage(team, 1)).z), n = b.n; let sx, sz;
+  if (from) { const f = beachNear(from.x, from.z), q = seaSpot(f.x - f.n[0] * 200, f.z - f.n[1] * 200, 0, 120); sx = q[0]; sz = q[1]; }
+  else { let k = 900; while (k > 200 && sdf(b.x - n[0] * k, b.z - n[1] * k) > -100) k -= 100; sx = b.x - n[0] * k; sz = b.z - n[1] * k; }
+  const u = spawn(team === ALLY ? 'lst' : 'mfp', team, sx, sz, { yaw: Math.atan2(b.x - sx, b.z - sz) });
+  u.cargo = ids; u.landLane = to && to.eng ? ENG_LANE : 1;
+  u.beach = { x: b.x - n[0] * 50, z: b.z - n[1] * 50 }; u.landPt = { x: b.x + n[0] * 35, z: b.z + n[1] * 35 }; u.exit = { x: sx, z: sz };
+  return u;
 }
 function unload(u) {
-  for (const id of u.cargo) { const x = u.pos.x + rnd(-30, 30); spawn(id, u.team, x, coastZ(x) - rnd(18, 45), { yaw: Math.PI }).lane = 1; }
+  for (const id of u.cargo) { const q = landSpot(u.landPt.x, u.landPt.z, 0, 45); spawn(id, u.team, q[0], q[1], { yaw: u.yaw }).lane = u.landLane; }
   if (u.team === ALLY) msg(`${u.def.name} landed ${u.cargo.length} units on the beach`, 'good');
+  else if (u.landLane === ENG_LANE) msg(`Axis troops are ashore in England! ${u.cargo.length} units landed near Dover.`, 'bad');
   u.cargo = null;
 }
 function requisition(id, team) {
   const d = DEFS[id];
   if (d.domain !== 'land' || d.role === 'cargo') return spawnAt(id, team);
-  if (Math.random() < 0.3 && !units.some(u => u.team === team && u.def.role === 'lander'))
+  const landers = units.filter(u => u.team === team && u.def.role === 'lander').length;
+  if (team === AXIS && calaisHeld() && landers < 2 && Math.random() < 0.3) return ferry([id, 'grenadier']);          // invade England
+  if (team === ALLY && engThreat() && Math.random() < 0.45) return spawnAt(id, team, -1);                           // home forces turn out to meet them
+  if (Math.random() < 0.3 && !landers)
     return sealift(team, [id].concat(team === ALLY ? ['troops', 'jeep'] : ['grenadier', 'kubel']));
   return airlift(team, [id]);
 }
-
 function syncMesh(u, dt) {
   const m = u.mesh, d = u.def; m.position.copy(u.pos);
   if (d.domain === 'bld') { m.rotation.y = u.yaw; m.scale.y = Math.max(0.04, u.built); }
@@ -619,18 +688,18 @@ function setBreak(u, t, dist, alt, jink) {
   u.breakPt.set(u.pos.x + Math.sin(y) * dist, alt, u.pos.z + Math.cos(y) * dist);
 }
 function patrolPoint(u) {
-  const d = u.def, s = u.team === ALLY ? 1 : -1, lim = MAP.x * 0.92;
-  if (d.role === 'torpedo') return V().set(clamp(frontX(SEA_LANE) + rnd(-1100, 1100), -lim, lim), 100, rnd(500, 2300));
+  const d = u.def, cx = v => clamp(v, -MAP.x * 0.95, MAP.x * 0.95), cz = v => clamp(v, -MAP.z * 0.95, MAP.z * 0.95);
+  if (d.role === 'torpedo') { const f = frontPos(SEA_LANE); return V().set(cx(f.x + rnd(-900, 900)), 100, cz(f.z + rnd(-700, 700))); }
   const lane = Math.floor(Math.random() * LANES);
   if (d.role === 'bomber') { const sp = stage(u.team, lane); return V().set(sp.x + rnd(-300, 300), 190, sp.z + rnd(-300, 300)); }
-  return V().set(clamp(frontX(lane) + rnd(-700, 700) - s * 150, -lim, lim), rnd(110, 200), LANE[lane].z + rnd(-500, 500));
+  const f = frontPos(lane); return V().set(cx(f.x + rnd(-700, 700)), rnd(110, 200), cz(f.z + rnd(-600, 600)));
 }
 function aiAir(u, dt) {
   const d = u.def, t = u.target, g = T1, gr = ground(u.pos.x, u.pos.z);
   if (d.role === 'cargo') {            // supply run: airport <-> far rear depot
     if (!u.route) {
-      const ap = AIRPORT[u.team], s = u.team === ALLY ? 1 : -1;
-      u.route = { i: 1, loaded: false, pts: [V().set(ap.x, 80, ap.z), V().set(ap.x + s * rnd(0, 400), 210, ap.z + rnd(2700, 3100))] };
+      const ap = AIRPORT[u.team], dp = HOME[u.team].airDepot;
+      u.route = { i: 1, loaded: false, pts: [V().set(ap.x, 80, ap.z), V().set(dp.x + rnd(-200, 200), 210, dp.z + rnd(-200, 200))] };
     }
     const r = u.route, p = r.pts[r.i]; g.copy(p);
     if (hdist(u.pos, p) < 90) { if (r.i === 0 && r.loaded) { deliver(u); r.loaded = false; } if (r.i === 1) r.loaded = true; r.i = 1 - r.i; }
@@ -687,23 +756,31 @@ function aiHeli(u, dt) {
 function aiLand(u, dt) {
   const d = u.def, t = u.target; let gx, gz, stop;
   if (t) { gx = t.pos.x; gz = t.pos.z; stop = d.gun.range * 0.7; }
-  else if (d.role === 'cargo') {       // supply truck: base <-> depot at the rear map edge
+  else if (d.role === 'cargo') {       // supply truck: base <-> depot up the road
     if (!u.route) {
-      const b = BASE[u.team], s = u.team === ALLY ? 1 : -1;
-      u.route = { i: 1, loaded: false, pts: [{ x: b.x + s * 170, z: b.z + rnd(-90, 90) }, { x: b.x + s * rnd(150, 450), z: -MAP.z + 90 }] };
+      const b = BASE[u.team], s = u.team === ALLY ? 1 : -1, dp = HOME[u.team].depot;
+      u.route = { i: 1, loaded: false, pts: [{ x: b.x + s * 170, z: b.z + rnd(-60, 60) }, { x: dp.x + rnd(-60, 60), z: dp.z + rnd(-60, 60) }] };
     }
     const r = u.route, p = r.pts[r.i]; gx = p.x; gz = p.z; stop = 0;
     if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 35) { if (r.i === 0 && r.loaded) { deliver(u); r.loaded = false; } if (r.i === 1) r.loaded = true; r.i = 1 - r.i; }
   }
-  else {                               // advance on this lane's objective and hold it; with the lane won, go for the headquarters
-    if (u.lane === undefined) u.lane = Math.abs(u.pos.z - LANE[0].z) < Math.abs(u.pos.z - LANE[1].z) ? 0 : 1;
-    const o = reach(u.team, u.lane);
-    if (o) { gx = o.x + (u.id % 5 - 2) * 30; gz = o.z + ((u.id >> 2) % 5 - 2) * 30; stop = 20; }
-    else { const b = BASE[1 - u.team]; gx = b.x; gz = b.z + (u.id % 5 - 2) * 30; stop = 60; }
+  else {                               // advance on this lane's objective and hold it
+    if (u.lane === undefined) { let bd = 1e9; for (const p of POINTS) if (!p.sea) { const dd = Math.hypot(p.x - u.pos.x, p.z - u.pos.z); if (dd < bd) { bd = dd; u.lane = p.lane; } } }
+    const jx = (u.id % 5 - 2) * 30, jz = ((u.id >> 2) % 5 - 2) * 30, eng = u.lane === ENG_LANE;
+    const o = eng ? engObjective(u.team) : reach(u.team, u.lane);
+    if (o) { gx = o.x + jx; gz = o.z + jz; stop = 20; }
+    else if (eng && u.team === ALLY) { const p = ENG[ENG.length - 1]; gx = p.x + jx * 2; gz = p.z + jz * 2; stop = 30; }   // England is secure: stand guard at Dover
+    else if (eng) { const b = BASE[ALLY]; gx = b.x; gz = b.z + jx; stop = 60; }                                   // England has fallen: on to the Allied headquarters
+    else if (u.team === ALLY) { const b = BASE[AXIS]; gx = b.x; gz = b.z + jx; stop = 60; }      // lane won: on to Berlin
+    else { const p = PT(0, u.lane); gx = p.x + jx; gz = p.z + jz; stop = 40; }                   // the Axis cannot cross the Channel: dig in on the coast
   }
   const dist = Math.hypot(gx - u.pos.x, gz - u.pos.z);
-  let want = Math.atan2(gx - u.pos.x, gz - u.pos.z);
-  if (terrainH(u.pos.x + Math.sin(u.yaw) * 25, u.pos.z + Math.cos(u.yaw) * 25) < World.water + 0.6) want = Math.atan2(gx > u.pos.x ? 0.6 : -0.6, -1);
+  navTo(u.pos.x, u.pos.z, gx, gz, false, NV);
+  let want = Math.atan2(NV.x - u.pos.x, NV.z - u.pos.z);
+  if (sdf(u.pos.x + Math.sin(u.yaw) * 25, u.pos.z + Math.cos(u.yaw) * 25) < 12) {   // water ahead: turn inland and along the shore toward the goal
+    const g = sdGrad(u.pos.x, u.pos.z); let tx = -g[1], tz = g[0]; if (tx * (gx - u.pos.x) + tz * (gz - u.pos.z) < 0) { tx = -tx; tz = -tz; }
+    want = Math.atan2(g[0] + tx * 0.8, g[1] + tz * 0.8);
+  }
   const dy = angDiff(want, u.yaw);
   u.turnIn = clamp(dy * 2, -1, 1);
   u.throttle = dist > stop ? (Math.abs(dy) < 1 ? 1 : 0.3) : 0;
@@ -717,29 +794,29 @@ function aiLand(u, dt) {
 }
 function dockOf(team) { for (const u of units) if (u.def.model === 'dock' && u.team === team) return u; return null; }
 function aiSea(u, dt) {
-  const d = u.def, t = u.target; let gx, gz, thr = 1;
+  const d = u.def, t = u.target; let gx, gz, thr = 1, direct = false;
   if (d.role === 'carrier' && u.cdAlt <= 0 && u !== player) fireAlt(u, u.pos);
   if (d.role === 'merchant') {
     if (!u.route) {
-      const b = BASE[u.team], s = u.team === ALLY ? 1 : -1;
-      u.route = { i: 1, loaded: false, pts: [{ x: b.x + s * 45, z: coastZ(b.x) + 95 }, { x: b.x + s * rnd(300, 900), z: coastZ(b.x) + rnd(1300, 1600) }] };
+      const H = HOME[u.team];
+      u.route = { i: 1, loaded: false, pts: [{ x: H.port.x + rnd(-40, 40), z: H.port.z + rnd(-40, 40) }, { x: H.seaFar.x + rnd(-200, 200), z: H.seaFar.z + rnd(-150, 150) }] };
     }
     const r = u.route, p = r.pts[r.i]; gx = p.x; gz = p.z;
-    if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 55) {
+    if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 60) {
       if (r.i === 0 && r.loaded) { deliver(u); r.loaded = false; }
       if (r.i === 1) r.loaded = true;
       r.i = 1 - r.i;
     }
-  } else if (d.role === 'lander') {    // run in to the beach, unload, sail home
+  } else if (d.role === 'lander') {    // run in to the beach, unload, sail back out
     if (u.cargo) {
-      gx = u.beachX; gz = coastZ(gx) + 50;
-      if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 40 || (u.aground && u.pos.z < coastZ(u.pos.x) + 130)) unload(u);
-    } else { gx = u.pos.x; gz = u.exitZ + 300; if (u.pos.z > u.exitZ - 60) { despawn(u); return; } }
+      gx = u.beach.x; gz = u.beach.z; const dd = Math.hypot(gx - u.pos.x, gz - u.pos.z); direct = dd < 500;
+      if (dd < 40 || (u.aground && dd < 180)) unload(u);
+    } else { gx = u.exit.x; gz = u.exit.z; if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 100) { despawn(u); return; } }
   } else if (t) {
     const dist = u.pos.distanceTo(t.pos), deep = t.def.sub && t.dive > 0.5;
     if (d.sub) u.diveT = 1;
-    if (deep || dist > d.gun.range * 0.7 || (d.sub && dist > 330)) { gx = t.pos.x; gz = Math.max(t.pos.z, coastZ(t.pos.x) + 80); }
-    else { const b = Math.atan2(t.pos.x - u.pos.x, t.pos.z - u.pos.z) + Math.PI / 2 * (u.id % 2 ? 1 : -1); gx = u.pos.x + Math.sin(b) * 200; gz = u.pos.z + Math.cos(b) * 200; thr = 0.55; }
+    if (deep || dist > d.gun.range * 0.7 || (d.sub && dist > 330)) { gx = t.pos.x; gz = t.pos.z; }
+    else { const b = Math.atan2(t.pos.x - u.pos.x, t.pos.z - u.pos.z) + Math.PI / 2 * (u.id % 2 ? 1 : -1); gx = u.pos.x + Math.sin(b) * 200; gz = u.pos.z + Math.cos(b) * 200; thr = 0.55; direct = true; }
     centerOf(t, TA).addScaledVector(t.vel, dist / d.gun.vel);
     u.aimYaw = Math.atan2(TA.x - u.pos.x, TA.z - u.pos.z);
     if (dist < d.gun.range && !deep) fireGun(u, TA, 0.015);
@@ -747,15 +824,19 @@ function aiSea(u, dt) {
   } else {
     if (d.sub) u.diveT = 0;
     if (!u.patrol || hdist(u.pos, u.patrol) < 90) {   // hold the contested sea point; with the sea lane won, blockade the enemy port
-      const o = reach(u.team, SEA_LANE) || homeSpot(1 - u.team, true);
-      u.patrol = V().set(o.x + rnd(-250, 250), 0, o.z + rnd(-250, 250));
+      const o = reach(u.team, SEA_LANE) || homeSpot(1 - u.team, SEA_LANE), q = seaSpot(o.x, o.z, 0, 260);
+      u.patrol = V().set(q[0], 0, q[1]);
     }
     gx = u.patrol.x; gz = u.patrol.z; u.aimYaw = u.yaw;
   }
-  let want = Math.atan2(gx - u.pos.x, gz - u.pos.z);
+  if (direct) { NV.x = gx; NV.z = gz; } else navTo(u.pos.x, u.pos.z, gx, gz, true, NV);
+  let want = Math.atan2(NV.x - u.pos.x, NV.z - u.pos.z);
   const sy = Math.sin(u.yaw), cy = Math.cos(u.yaw);
-  if (!(d.role === 'lander' && u.cargo) && (terrainH(u.pos.x + sy * 45, u.pos.z + cy * 45) > World.water - 4 || terrainH(u.pos.x + sy * 100, u.pos.z + cy * 100) > World.water - 4 || u.pos.z > MAP.z - 40))
-    want = u.pos.z > MAP.z - 40 ? Math.PI : Math.atan2(gx > u.pos.x ? 0.5 : -0.5, 1);
+  if (!(d.role === 'lander' && u.cargo) && (sdf(u.pos.x + sy * 45, u.pos.z + cy * 45) > -60 || sdf(u.pos.x + sy * 100, u.pos.z + cy * 100) > -60)) {
+    // shallows ahead: turn out to sea and along the shore toward the goal
+    const g = sdGrad(u.pos.x, u.pos.z); let tx = -g[1], tz = g[0]; if (tx * (gx - u.pos.x) + tz * (gz - u.pos.z) < 0) { tx = -tx; tz = -tz; }
+    want = Math.atan2(-g[0] + tx * 0.7, -g[1] + tz * 0.7);
+  }
   for (const b of World.icebergs) {
     if (b.k < 0.3) continue;
     const dx = b.x - u.pos.x, dz = b.z - u.pos.z, dd = Math.hypot(dx, dz);
@@ -879,18 +960,18 @@ function commander(team, dt) {
 }
 function raids(dt) {
   raidT -= dt; if (raidT > 0) return; raidT = rnd(26, 44);
-  const team = Math.random() < 0.5 ? ALLY : AXIS, s = team === ALLY ? 1 : -1, lim = MAP.x + 100;
+  const team = Math.random() < 0.5 ? ALLY : AXIS, cx = v => clamp(v, -MAP.x - 100, MAP.x + 100), cz = v => clamp(v, -MAP.z - 100, MAP.z + 100);
   const bid = team === ALLY ? 'b25' : 'ju88', tid = team === ALLY ? 'avenger' : 'fi167';
   if (Math.random() < 0.45 && Account.has(bid)) {          // level-bomber formation crossing the front from its own rear
-    const lane = Math.random() < 0.5 ? 0 : 1, x0 = frontX(lane) - s * 2300, z0 = LANE[lane].z + rnd(-300, 300);
-    for (let i = 0; i < 3; i++) spawn(bid, team, clamp(x0 - s * i * 45, -lim, lim), z0 + (i - 1) * 55, { alt: 210, raid: true });
+    const lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane), bv = behind(team, sp.lane, sp.col), f = frontPos(lane), yaw = Math.atan2(-bv[0], -bv[1]);
+    for (let i = 0; i < 3; i++) spawn(bid, team, cx(f.x + bv[0] * (2300 + i * 45) - bv[1] * (i - 1) * 55), cz(f.z + bv[1] * (2300 + i * 45) + bv[0] * (i - 1) * 55), { alt: 210, raid: true, yaw });
     msg(team === ALLY ? 'Allied bomber formation crossing the front!' : 'WARNING: Axis bomber formation inbound!', team === ALLY ? 'good' : 'bad');
     return;
   }
   if (!Account.has(tid) || !units.some(u => u.team !== team && u.def.domain === 'sea')) return;
-  const n = 2 + (Math.random() < 0.4 ? 1 : 0), x0 = clamp(frontX(SEA_LANE) - s * rnd(300, 1200), -lim, lim);
-  for (let i = 0; i < n; i++) spawn(tid, team, x0 + i * 40, 2700 - i * 25, { alt: 110, yaw: Math.PI, raid: true });
-  msg(team === ALLY ? 'Allied torpedo bombers inbound from the south!' : 'WARNING: Axis torpedo bombers hunting our ships!', team === ALLY ? 'good' : 'bad');
+  const sp = stage(team, SEA_LANE), bv = behind(team, sp.lane, sp.col), f = frontPos(SEA_LANE), r = rnd(1100, 1700), n = 2 + (Math.random() < 0.4 ? 1 : 0);
+  for (let i = 0; i < n; i++) spawn(tid, team, cx(f.x + bv[0] * r - bv[1] * i * 40), cz(f.z + bv[1] * r + bv[0] * i * 40), { alt: 110, yaw: Math.atan2(-bv[0], -bv[1]), raid: true });
+  msg(team === ALLY ? 'Allied torpedo bombers inbound over the sea!' : 'WARNING: Axis torpedo bombers hunting our ships!', team === ALLY ? 'good' : 'bad');
 }
 // ---- capture points: destroy the command post, then hold the ground (or the water) to take the point
 const BEAM_GEO = new THREE.CylinderGeometry(5, 5, 320, 8, 1, true);
@@ -916,9 +997,9 @@ function capture(p, team, byPlayer) {
   if (team === ALLY) {
     stats.caps++;
     if (byPlayer) { stats.credits += 250; stats.capCr += 250; money += 400; }
-    banner(p.name + ' captured', 'The front line moves east');
+    banner(p.name + (p.eng ? ' retaken' : ' captured'), p.eng ? 'The invaders are pushed back toward the sea' : 'The front line moves east');
     msg(`${p.name} is ours!` + (byPlayer ? '  +$400 · +250 credits' : ''), 'gold');
-  } else { banner(p.name + ' lost', 'The Axis push the front line west'); msg(`The Axis have taken ${p.name}!`, 'bad'); }
+  } else { banner(p.name + ' lost', p.eng ? 'The invasion of England advances' : 'The Axis push the front line west'); msg(`The Axis have taken ${p.name}!`, 'bad'); }
 }
 function updatePoints(dt) {
   capT -= dt; if (capT > 0) return; capT = 0.5;
@@ -1046,7 +1127,7 @@ function playerControl(dt) {
 }
 function updateCamera(dt) {
   if (state === 'menu') {
-    const a = performance.now() * 0.00006, q = PT(selCol, 1); camera.position.set(q.x + Math.sin(a) * 380, q.y + 150, q.z + Math.cos(a) * 380);
+    const a = performance.now() * 0.00006, q = selCol < 0 ? ENG[1] : PT(selCol, 1); camera.position.set(q.x + Math.sin(a) * 380, q.y + 150, q.z + Math.cos(a) * 380);
     camera.lookAt(q.x, q.y + 10, q.z); return;
   }
   if (!focusMesh) return;
@@ -1117,8 +1198,9 @@ function toggleShop(on) {
   else if (!on && state === 'shop') { state = 'playing'; $('shop').classList.remove('on'); }
 }
 // ---- campaign map: shown before the battle, after losing a vehicle, and on M (paused)
-function frontCol() { let c = 0; for (const p of POINTS) if (p.owner === ALLY) c = Math.max(c, p.col); return c; }
-function canDeployIn(c) { return c === 0 || POINTS.some(p => p.col === c && p.owner === ALLY); }
+function frontCol() { let c = 0; for (const p of POINTS) if (!p.eng && p.owner === ALLY) c = Math.max(c, p.col); return c; }
+function canDeployIn(c) { return c <= 0 || POINTS.some(p => secOf(p) === c && p.owner === ALLY); }
+function secPoints(c) { return POINTS.filter(p => secOf(p) === c); }
 function openMenu() {
   if (!canDeployIn(selCol)) selCol = frontCol();
   $('menu').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock(); input.fire = false; input.zoom = false; renderMenu();
@@ -1134,8 +1216,8 @@ function renderMenu() {
     : mode === 'map' ? 'The battle is paused. Redeploy to another sector, visit the Armory, or end the operation and bank your credits.'
       : 'Push the front line east, sector by sector, until the Axis headquarters falls. Click a sector on the map, then choose a vehicle.';
   $('acct').innerHTML = `<b>${a.credits.toLocaleString()}</b> credits` + (mode !== 'menu' ? ` <i>+${stats.credits.toLocaleString()} this battle</i>` : '') + `<small>${a.battles} battles · ${a.wins} won · ${a.kills} kills · ${a.campaigns} campaigns won</small>`;
-  const held = POINTS.filter(p => p.col === selCol && p.owner === ALLY).length;
-  $('sectorInfo').innerHTML = `Deploying in the <b>${SECTORS[selCol]}</b> sector · ${held} of ${LANES} points held` + (selCol === frontCol() ? ' · front line' : '') + (selCol === 0 ? ' · home runway' : '');
+  const sec = secPoints(selCol), held = sec.filter(p => p.owner === ALLY).length;
+  $('sectorInfo').innerHTML = (selCol < 0 ? 'Deploying in <b>England</b>' : `Deploying in the <b>${SECTORS[selCol]}</b> sector`) + ` · ${held} of ${sec.length} points held` + (selCol === frontCol() ? ' · front line' : '') + (selCol < 0 ? ' · home runway and harbour' : '');
   const tabs = $('menuTabs'); tabs.innerHTML = '';
   for (const t of ['Deploy', 'Armory']) {
     const b = document.createElement('button'); b.className = 'tab' + (t === menuTab ? ' on' : ''); b.textContent = t;
@@ -1191,7 +1273,7 @@ function deploy(id) {
   if (old && old.mine && !old.dead) despawn(old);        // your previous personal vehicle is withdrawn
   if (redeploy) deployCd = 20;
   state = 'playing'; $('menu').classList.remove('on'); $('shop').classList.remove('on'); $('hud').style.display = 'block';
-  if (first) { const s = World.info; banner(SECTORS[selCol] + ' sector', `${s.name}. ${s.desc}`); } else msg(`Deployed in ${DEFS[id].name}, ${SECTORS[selCol]} sector`, 'good');
+  if (first) { const s = World.info; banner(secName(selCol) + (selCol < 0 ? '' : ' sector'), `${s.name}. ${s.desc}`); } else msg(`Deployed in ${DEFS[id].name}, ${secName(selCol)}`, 'good');
   const cv = renderer.domElement; if (!touchMode && cv.requestPointerLock) { try { const r = cv.requestPointerLock(); if (r && r.catch) r.catch(() => { }); } catch (e) { } }
 }
 const startAs = deploy;
@@ -1271,7 +1353,7 @@ function ret(c, x, y, r) {
 let mapBgCv = null, campCtx = null;
 function mapBg() {
   if (mapBgCv) return mapBgCv;
-  const w = 1400, h = 600; mapBgCv = document.createElement('canvas'); mapBgCv.width = w; mapBgCv.height = h; const b = mapBgCv.getContext('2d');
+  const w = 1400, h = 750; mapBgCv = document.createElement('canvas'); mapBgCv.width = w; mapBgCv.height = h; const b = mapBgCv.getContext('2d');
   for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
     const t = terrainH((x / w * 2 - 1) * MAP.x, (y / h * 2 - 1) * MAP.z);
     b.fillStyle = t > 9 ? '#4f6b3c' : t > 0.5 ? '#46663a' : t > -3 ? '#8a8560' : t > -14 ? '#1c4a66' : '#17405a'; b.fillRect(x, y, 2, 2);
@@ -1310,7 +1392,7 @@ function drawUnitDots(c, X, Z, k) {
 // the corner map shows the ground around you; M opens the whole campaign
 function drawMini() {
   const cv = $('mini'), w = cv.width, h = cv.height, c = miniCtx, bg = mapBg();
-  const span = 1500, spanZ = span * h / w, f = focusMesh ? focusMesh.position : PT(selCol, 1);
+  const span = 1500, spanZ = span * h / w, f = focusMesh ? focusMesh.position : selCol < 0 ? ENG[1] : PT(selCol, 1);
   const cx = clamp(f.x, -MAP.x + span, MAP.x - span), cz = clamp(f.z, -MAP.z + spanZ, MAP.z - spanZ);
   const kx = bg.width / (2 * MAP.x), kz = bg.height / (2 * MAP.z);
   c.drawImage(bg, (cx - span + MAP.x) * kx, (cz - spanZ + MAP.z) * kz, 2 * span * kx, 2 * spanZ * kz, 0, 0, w, h);
@@ -1326,34 +1408,81 @@ function drawMini() {
     c.beginPath(); c.moveTo(x, z); c.lineTo(x + Math.sin(camYaw) * 12, z + Math.cos(camYaw) * 12); c.stroke();
   }
 }
+// ---- campaign map: the whole theatre from above, drawn from the same outlines the terrain is built from
+const EU_LABELS = [['ENGLAND', -1.4, 52.4, 15], ['FRANCE', 2.6, 47.3, 15], ['GERMANY', 10.2, 50.6, 15], ['IRELAND', -8, 53.2, 12], ['English Channel', -2.6, 50.28, 10], ['North Sea', 3.2, 54.2, 12], ['Bay of Biscay', -5.5, 46.9, 10], ['Baltic', 14.6, 54.9, 10]];
+let euBg = null;
+function euXY(lon, lat, w, h) { return [(lon - EU.lon0) / (EU.lon1 - EU.lon0) * w, (EU.lat1 - lat) / (EU.lat1 - EU.lat0) * h]; }
+function euWorld(x, z, w, h) { return [(x / MAP.x + 1) / 2 * w, (z / MAP.z + 1) / 2 * h]; }
+function euLane(l, idx, w, h) { const q = lanePos(l, idx); return euWorld(q.x, q.z, w, h); }
+function euPoint(p, w, h) { return euWorld(p.x, p.z, w, h); }
+function euFront(l, w, h) { return euLane(l, frontIdx(l), w, h); }
+function drawEuBg(w, h) {
+  euBg = document.createElement('canvas'); euBg.width = w; euBg.height = h; const c = euBg.getContext('2d');
+  const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, '#163a52'); g.addColorStop(1, '#1d4a66'); c.fillStyle = g; c.fillRect(0, 0, w, h);
+  c.strokeStyle = 'rgba(255,255,255,.05)'; c.lineWidth = 1;                 // graticule
+  for (let lon = -8; lon < 18; lon += 2) { const q = euXY(lon, 0, w, h); c.beginPath(); c.moveTo(q[0], 0); c.lineTo(q[0], h); c.stroke(); }
+  for (let lat = 47; lat < 56; lat++) { const q = euXY(0, lat, w, h); c.beginPath(); c.moveTo(0, q[1]); c.lineTo(w, q[1]); c.stroke(); }
+  const land = () => { for (const poly of EU_LAND) { c.beginPath(); poly.forEach((q, i) => { const r = euXY(q[0], q[1], w, h); c[i ? 'lineTo' : 'moveTo'](r[0], r[1]); }); c.closePath(); c.fill(); c.stroke(); } };
+  c.lineJoin = 'round'; c.fillStyle = 'rgba(120,170,190,.25)'; c.strokeStyle = 'rgba(120,170,190,.25)'; c.lineWidth = 9; land();   // shallows
+  c.fillStyle = '#4b6a3d'; c.strokeStyle = '#c9c08f'; c.lineWidth = 1.5; land();
+  const R = rng32(1944);
+  for (let i = 0; i < 2600; i++) { c.fillStyle = R() < 0.5 ? 'rgba(0,0,0,.05)' : 'rgba(255,255,220,.04)'; c.fillRect(R() * w, R() * h, 2 + R() * 3, 2 + R() * 3); }
+  c.textAlign = 'center';
+  for (const L of EU_LABELS) {
+    const q = euXY(L[1], L[2], w, h), sea = L[3] < 13 && L[0] !== 'IRELAND';
+    c.font = (sea ? 'italic ' : '700 ') + L[3] + 'px "Trebuchet MS",sans-serif'; c.fillStyle = sea ? 'rgba(170,205,225,.6)' : 'rgba(20,30,15,.45)';
+    c.fillText(sea ? L[0] : L[0].split('').join(' '), q[0], q[1]);
+  }
+}
 function drawCamp() {
-  const cv = $('camp'), w = cv.width, h = cv.height, c = campCtx, X = x => (x / MAP.x + 1) / 2 * w, Z = z => (z / MAP.z + 1) / 2 * h;
-  c.drawImage(mapBg(), 0, 0, w, h);
-  const path = frontPath();
-  for (const side of [0, 1]) {             // territory wash: Allied west of the front, Axis east of it
-    c.beginPath(); c.moveTo(side ? w : 0, 0); for (const q of path) c.lineTo(X(q[0]), Z(q[1])); c.lineTo(side ? w : 0, h); c.closePath();
-    c.fillStyle = side ? 'rgba(255,60,40,.17)' : 'rgba(60,120,255,.17)'; c.fill();
+  const cv = $('camp'), w = cv.width, h = cv.height, c = campCtx;
+  if (!euBg) drawEuBg(w, h);
+  c.drawImage(euBg, 0, 0);
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  for (let l = 0; l < LANES; l++) {        // ground held: each lane washed in its owner's colour up to the front
+    const f = frontIdx(l);
+    for (const side of [0, 1]) {
+      c.beginPath(); const from = side ? f : 0, to = side ? COLS + 1 : f;
+      for (let k = 0; k <= 24; k++) { const q = euLane(l, from + (to - from) * k / 24, w, h); c[k ? 'lineTo' : 'moveTo'](q[0], q[1]); }
+      c.strokeStyle = side ? 'rgba(240,60,45,.3)' : 'rgba(60,125,255,.34)'; c.lineWidth = 30; c.stroke();
+    }
   }
-  const cw = X(1750) - X(0);
-  c.font = '700 13px "Trebuchet MS",sans-serif'; c.textAlign = 'center';
-  for (let i = 0; i < COLS; i++) {
-    const x0 = X((i - 3.5) * 1750), ok = canDeployIn(i);
-    if (i === selCol) { c.fillStyle = 'rgba(242,193,78,.16)'; c.fillRect(x0, 0, cw, h); c.strokeStyle = '#f2c14e'; c.lineWidth = 2; c.strokeRect(x0 + 1, 1, cw - 2, h - 2); }
-    else { c.fillStyle = 'rgba(255,255,255,.09)'; c.fillRect(x0, 0, 1, h); }
-    c.fillStyle = i === selCol ? '#f2c14e' : ok ? '#f4f1e2' : 'rgba(244,241,226,.5)'; c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.7)';
-    c.strokeText(SECTORS[i].toUpperCase(), x0 + cw / 2, 18); c.fillText(SECTORS[i].toUpperCase(), x0 + cw / 2, 18);
+  const sp = secPoints(selCol).map(p => euPoint(p, w, h));   // the sector you will deploy in
+  c.beginPath(); sp.forEach((q, i) => c[i ? 'lineTo' : 'moveTo'](q[0], q[1]));
+  c.strokeStyle = 'rgba(242,193,78,.4)'; c.lineWidth = 40; c.stroke(); c.strokeStyle = '#f2c14e'; c.lineWidth = 2; c.stroke();
+  const f0 = euFront(0, w, h), f1 = euFront(1, w, h), f2 = euFront(2, w, h);   // the front line, from the sea to deep inland
+  const path = [[f2[0] + (f2[0] - f1[0]) * 0.8, f2[1] + (f2[1] - f1[1]) * 0.8], f2, f1, f0, [f0[0] + (f0[0] - f1[0]) * 0.8, f0[1] + (f0[1] - f1[1]) * 0.8]];
+  c.beginPath(); path.forEach((q, i) => c[i ? 'lineTo' : 'moveTo'](q[0], q[1]));
+  c.strokeStyle = 'rgba(0,0,0,.7)'; c.lineWidth = 6; c.stroke(); c.setLineDash([9, 7]); c.strokeStyle = '#ffd24a'; c.lineWidth = 3; c.stroke(); c.setLineDash([]);
+  if (calaisHeld()) {                      // the invasion route across the strait
+    const a = euPoint(PT(4, 1), w, h), b = euPoint(ENG[ENG.length - 1], w, h);
+    c.setLineDash([3, 5]); c.strokeStyle = '#ff8a7a'; c.lineWidth = 2; c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); c.setLineDash([]);
   }
-  drawFrontLine(c, X, Z, 2.5);
+  c.textAlign = 'center';
+  const text = (t, x, y, col) => { c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.8)'; c.strokeText(t, x, y); c.fillStyle = col || '#f4f1e2'; c.fillText(t, x, y); };
   c.font = '700 11px "Trebuchet MS",sans-serif';
   for (const team of [ALLY, AXIS]) {
-    const b = BASE[team], x = X(b.x - (team === ALLY ? 1 : -1) * 170), z = Z(b.z);
-    c.fillStyle = team === ALLY ? '#3f7dff' : '#f04a3c'; c.strokeStyle = '#101010'; c.lineWidth = 1.5; c.fillRect(x - 8, z - 8, 16, 16); c.strokeRect(x - 8, z - 8, 16, 16);
-    c.fillStyle = '#fff'; c.fillText('HQ', x, z + 4);
-    c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.75)'; c.strokeText(TEAM_NAME[team] + ' HQ', x + (team === ALLY ? 12 : -12), z + 24); c.fillStyle = '#f4f1e2'; c.fillText(TEAM_NAME[team] + ' HQ', x + (team === ALLY ? 12 : -12), z + 24);
+    const q = euWorld(BASE[team].x, BASE[team].z, w, h);
+    c.fillStyle = team === ALLY ? '#3f7dff' : '#f04a3c'; c.strokeStyle = '#101010'; c.lineWidth = 1.5; c.fillRect(q[0] - 9, q[1] - 9, 18, 18); c.strokeRect(q[0] - 9, q[1] - 9, 18, 18);
+    c.fillStyle = '#fff'; c.fillText('HQ', q[0], q[1] + 4);
+    text(team === ALLY ? 'Allied HQ' : 'Axis HQ · Berlin', q[0], q[1] - 15);
   }
-  if (state !== 'menu') drawUnitDots(c, X, Z, 0.8);
-  drawPointDots(c, X, Z, 8, true);
-  if (state !== 'menu' && focusMesh) { const p = focusMesh.position; c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(X(p.x), Z(p.z), 6, 0, 6.3); c.stroke(); }
+  if (state !== 'menu') for (const u of units) {
+    if (u === player || u.def.domain === 'bld') continue;
+    if (u.team === AXIS && u.def.sub && u.dive > 0.5) continue;
+    const q = euWorld(u.pos.x, u.pos.z, w, h); c.fillStyle = u.team === ALLY ? '#bcd4ff' : '#ffb3a8'; c.fillRect(q[0] - 1.5, q[1] - 1.5, 3, 3);
+  }
+  for (const p of POINTS) {
+    const q = euPoint(p, w, h), r = p.lane === 1 ? 8 : p.eng ? 7 : 6;
+    c.beginPath(); c.arc(q[0], q[1], r, 0, 6.3); c.fillStyle = p.owner < 0 ? '#f2f0e0' : p.owner === ALLY ? '#3f7dff' : '#f04a3c'; c.fill();
+    c.lineWidth = 1.5; c.strokeStyle = p.contest ? '#ffd24a' : '#101010'; c.stroke();
+    if (p.prog) { c.beginPath(); c.arc(q[0], q[1], r + 3, -Math.PI / 2, -Math.PI / 2 + Math.abs(p.prog) * 6.283); c.strokeStyle = p.prog > 0 ? '#9fc0ff' : '#ff9a8a'; c.lineWidth = 2.5; c.stroke(); }
+    c.font = (p.lane === 1 ? '700 12px' : '700 10px') + ' "Trebuchet MS",sans-serif';
+    if (p.lane === 1) text(SECTORS[p.col], q[0], q[1] + r + 13, p.col === selCol ? '#f2c14e' : canDeployIn(p.col) ? '#f4f1e2' : 'rgba(244,241,226,.65)');
+    else if (p.eng) text(p.name, q[0], q[1] - r - 5, selCol < 0 ? '#f2c14e' : '#f4f1e2');
+    else if (p.col === selCol) text(p.name, q[0], q[1] + (p.lane ? -r - 5 : r + 12));
+  }
+  if (state !== 'menu' && focusMesh) { const q = euWorld(focusMesh.position.x, focusMesh.position.z, w, h); c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(q[0], q[1], 7, 0, 6.3); c.stroke(); }
 }
 function updateHUD(dt) {
   if (hurtFlash > 0) hurtFlash -= dt;
@@ -1400,7 +1529,7 @@ function updateHUD(dt) {
     if (cp.post) txt = cp.owner === ALLY ? `${cp.name} · held by the Allies` : `${cp.name} · destroy the Axis command post to open it for capture`;
     else if (!fits) txt = `${cp.name} · open: only ${cp.sea ? 'warships' : 'ground forces'} can capture it`;
     else if (cp.contest) txt = `${cp.name} · contested! Clear the enemy out`;
-    else if (!canCap(cp, ALLY)) txt = `${cp.name} · cut off: take ${PT(cp.col - 1, cp.lane).name} first`;
+    else if (!canCap(cp, ALLY)) txt = `${cp.name} · cut off: take ${(cp.eng ? ENG[cp.col - 1] : PT(cp.col - 1, cp.lane)).name} first`;
     else { txt = `Capturing ${cp.name}`; k = Math.max(0, cp.prog); }
     capEl.style.display = 'block'; $('capTxt').textContent = txt; $('capBar').style.width = k * 100 + '%'; $('capBar').parentNode.style.display = k > 0 || txt.startsWith('Capturing') ? '' : 'none';
   } else capEl.style.display = 'none';
@@ -1422,7 +1551,7 @@ function setupTeams() {
     // interleave so early buildings spread out
     plots[team].sort((p, q) => Math.hypot(p.x - b.x, p.z - b.z) - Math.hypot(q.x - b.x, q.z - b.z));
     spawn('hq', team, b.x - s * 170, b.z, { yaw: s * Math.PI / 2 });
-    spawn('dock', team, b.x, coastZ(b.x) - 6, { yaw: 0 });
+    spawn('dock', team, HOME[team].dock.x, HOME[team].dock.z, { yaw: HOME[team].dockYaw });
     spawn('airport', team, AIRPORT[team].x, AIRPORT[team].z - 45, { yaw: 0 });
     for (const id of ['factory', 'house', 'house', 'aagun', 'aagun']) build(team, id, true);
     const ids = team === ALLY ? ['spitfire', 'spitfire', 'mustang', 'r4', 'c47', 'troops', 'troops', 'troops', 'jeep', 'sherman', 'sherman', 'halftrack', 'truck', 'truck', 'ward', 'ward', 'pt', 'gato', 'atlanta', 'liberty', 'liberty']
@@ -1430,6 +1559,7 @@ function setupTeams() {
     // both armies are limited to the tiers the player has unlocked: anything above that is swapped for the basic type
     const basic = team === ALLY ? { air: 'spitfire', land: 'troops', sea: 'ward' } : { air: 'bf109', land: 'grenadier', sea: 'z23' };
     for (const id of ids) spawnAt(Account.has(id) ? id : basic[DEFS[id].domain], team);
+    if (team === ALLY) for (let i = 0; i < 2; i++) spawnAt('troops', ALLY, -1);      // the garrison of England
   }
 }
 function update(dt) {
@@ -1552,14 +1682,16 @@ function init() {
   setupTeams(); bindInput(); bindTouch(); resize();
   selCol = frontCol();
   $('camp').addEventListener('click', e => {
-    const r = e.currentTarget.getBoundingClientRect(), wx = ((e.clientX - r.left) / r.width * 2 - 1) * MAP.x, c = clamp(Math.round(wx / 1750) + 3, 0, COLS - 1);
+    const cv = e.currentTarget, r = cv.getBoundingClientRect(), mx = (e.clientX - r.left) / r.width * cv.width, my = (e.clientY - r.top) / r.height * cv.height;
+    let c = 0, bd = 1e9;                   // the sector whose nearest point is closest to the click
+    for (const p of POINTS) { const q = euPoint(p, cv.width, cv.height), dd = Math.hypot(q[0] - mx, q[1] - my); if (dd < bd) { bd = dd; c = secOf(p); } }
     if (canDeployIn(c)) { selCol = c; renderMenu(); }
-    else $('sectorInfo').innerHTML = `The <b>${SECTORS[c]}</b> sector is not in Allied hands: you can only deploy where the Allies hold a point.`;
+    else $('sectorInfo').innerHTML = `The <b>${secName(c)}</b> sector is not in Allied hands: you can only deploy where the Allies hold a point.`;
   });
   $('resetLink').onclick = () => { if (confirm('Start again from scratch? Every unlock, credit and the campaign map is lost.')) { Account.reset(); location.reload(); } };
   renderMenu();
   requestAnimationFrame(loop);
 }
 // debug / test handle
-window.G = { units, wrecks, projs, World, step(n, dt) { for (let i = 0; i < n; i++) update(dt || 0.033); }, get player() { return player; }, get money() { return money; }, set money(v) { money = v; }, get state() { return state; }, startAs, deploy, buy, toggleShop, toggleMap, switchVehicle, damage, kill, spawnAt, spawn, airlift, sealift, requisition, setPlayer, Account, POINTS, PT, capture, endBattle, reach, stage, frontX, get battleT() { return battleT; }, set battleT(v) { battleT = v; }, get selCol() { return selCol; }, set selCol(v) { selCol = v; }, stats, get lastBought() { return lastBought; }, get deployCd() { return deployCd; }, set deployCd(v) { deployCd = v; } };
+window.G = { units, wrecks, projs, World, step(n, dt) { for (let i = 0; i < n; i++) update(dt || 0.033); }, get player() { return player; }, get money() { return money; }, set money(v) { money = v; }, get state() { return state; }, startAs, deploy, buy, toggleShop, toggleMap, switchVehicle, damage, kill, spawnAt, spawn, airlift, sealift, requisition, setPlayer, Account, POINTS, PT, capture, endBattle, reach, stage, frontPos, ferry, ENG, engObjective, calaisHeld, navTo, sdf, get battleT() { return battleT; }, set battleT(v) { battleT = v; }, get selCol() { return selCol; }, set selCol(v) { selCol = v; }, stats, get lastBought() { return lastBought; }, get deployCd() { return deployCd; }, set deployCd(v) { deployCd = v; } };
 init();

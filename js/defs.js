@@ -3,19 +3,55 @@
 const ALLY = 0, AXIS = 1;
 const TEAM_NAME = ['Allied', 'Axis'];
 const TEAM_COL = [0x3a78ff, 0xd83030];
-const MAP = { x: 7000, z: 3000 };
-const BASE = [{ x: -6200, z: -750 }, { x: 6200, z: -750 }];
-const AIRPORT = [{ x: -6380, z: -1300 }, { x: 6380, z: -1300 }];   // runway centre; runs east-west
+// The battlefield is north-west Europe, seen from above: x runs west to east, z north to south.
+const MAP = { x: 7000, z: 3750 };
+const EU = { lon0: -9, lon1: 17.7, lat0: 46.5, lat1: 55.5 };
+// longitude / latitude -> battlefield coordinates
+function LL(lon, lat) { return { x: Math.round(((lon - EU.lon0) / (EU.lon1 - EU.lon0) * 2 - 1) * MAP.x), z: Math.round(((EU.lat1 - lat) / (EU.lat1 - EU.lat0) * 2 - 1) * MAP.z) }; }
+const BASE = [LL(-4.0, 50.72), LL(13.4, 52.5)];               // Allied HQ in Devon, Axis HQ at Berlin
+const AIRPORT = [LL(-2.2, 51.0), LL(12.2, 52.0)];             // runway centre; runs east-west
+// supply routes and harbours. dock / port are worked out from the coastline when the terrain is built.
+const HOME = [
+  { depot: LL(-2.6, 50.95), airDepot: LL(-1.5, 53.5), dockFrom: LL(-4.0, 50.72), dockDir: [0, 1], dockYaw: 0, seaFar: LL(-6.5, 49.3) },
+  { depot: LL(13.4, 53.3), airDepot: LL(15.5, 51.0), dockFrom: LL(9.0, 54.6), dockDir: [-1, 0], dockYaw: -Math.PI / 2, seaFar: LL(6.6, 55.1) }
+];
+const EU_LAND = [
+  // Great Britain
+  [[-5.7, 50.05], [-4.2, 50.35], [-3.4, 50.6], [-2, 50.6], [-1.1, 50.75], [0.3, 50.75], [1.2, 51.2], [1, 51.4], [0.6, 51.5], [1.6, 52], [1.75, 52.7], [0.4, 52.95], [0.1, 53.5], [-0.1, 54], [-0.6, 54.5], [-1.4, 55], [-1.6, 55.6], [-2.1, 56], [-3, 56], [-2.5, 56.5], [-2, 57.6], [-3.5, 57.7], [-3, 58.6], [-5, 58.6], [-5.8, 57.5], [-5.6, 56.3], [-5, 55.3], [-4.9, 54.7], [-3.4, 54.9], [-3, 54], [-3.1, 53.3], [-4.5, 53.3], [-4.2, 52.8], [-4.1, 52.3], [-5.2, 51.9], [-4.9, 51.6], [-3.2, 51.4], [-3, 51.2], [-4.3, 51.15], [-5.2, 50.35]],
+  // Ireland
+  [[-6, 52.2], [-6.2, 53.3], [-5.5, 54.4], [-6.3, 55.2], [-7.8, 55.3], [-8.6, 54.5], [-10, 54.2], [-9.5, 53.3], [-10.3, 52], [-9.6, 51.5], [-8, 51.8], [-6.9, 52.1]],
+  // the Continent, Spain round to the Baltic
+  [[-9.3, 43], [-8, 43.75], [-5.8, 43.6], [-3.8, 43.45], [-1.8, 43.35], [-1.2, 44.6], [-1.1, 45.6], [-1.2, 46.2], [-2.1, 46.8], [-2.5, 47.3], [-3.5, 47.75], [-4.4, 47.95], [-4.75, 48.3], [-4.5, 48.6], [-3.6, 48.75], [-2.7, 48.55], [-1.9, 48.65], [-1.55, 48.65], [-1.6, 49.2], [-1.85, 49.7], [-1.3, 49.7], [-1.1, 49.35], [-0.3, 49.3], [0.1, 49.5], [0.7, 49.87], [1.5, 50.1], [1.6, 50.75], [1.85, 50.96], [2.5, 51.1], [3.2, 51.35], [3.5, 51.45], [4, 51.95], [4.5, 52.4], [4.7, 52.95], [5.4, 53.25], [6.2, 53.45], [7.1, 53.55], [8, 53.6], [8.5, 53.55], [8.6, 53.9], [8.9, 54.3], [8.6, 55], [8.1, 55.6], [8.1, 56.6], [8.6, 57.1], [9.9, 57.6], [10.6, 57.7], [10.3, 56.9], [10.9, 56.4], [10.2, 55.8], [9.7, 55.2], [10, 54.7], [10.9, 54.35], [11.1, 54], [12.1, 54.15], [13, 54.45], [13.8, 54.1], [14.3, 53.9], [16, 54.25], [18, 54.8], [20, 54.4], [20, 42], [-9.3, 42]],
+  // Zealand and southern Sweden
+  [[11, 55.7], [12.5, 55.6], [12.6, 56.1], [11.6, 55.95]],
+  [[12.8, 56], [12.9, 55.4], [14.2, 55.4], [14.4, 56], [16.5, 57], [16, 60], [11.3, 59], [11.8, 57.6]]
+];
+// [lon, lat] for each lane: index 0 = Allied home, 1..7 = the sectors west to east, 8 = Axis home
+const EU_LANES = [
+  [[-3.9, 48.15], [-3.2, 48.05], [-1.2, 48.4], [0.1, 48.5], [1.8, 48.7], [2.9, 50], [5.2, 50.4], [9.3, 52], [12.6, 51.6]],
+  [[-4.55, 48.4], [-4.15, 48.42], [-1.45, 49.45], [-0.37, 49.1], [1.1, 49.44], [1.95, 50.8], [4.4, 51.22], [8.8, 53.08], [12.7, 52.5]],
+  [[-4.3, 49.9], [-5.3, 49], [-2.2, 50.15], [-0.6, 49.95], [0.5, 50.3], [1.9, 51.5], [3.1, 52.1], [6.8, 54.1], [8.0, 54.55]]
+];
 
-// ---- campaign: seven sectors west to east, each with three capture points (two on land, one at sea)
+// ---- campaign: seven sectors along the coast from Brittany to Germany, each with three capture points:
+// lane 0 inland, lane 1 the coast town, lane 2 out at sea. NODE holds each lane's chain of places in battlefield coordinates.
 const SECTORS = ['Brest', 'Cherbourg', 'Caen', 'Rouen', 'Calais', 'Antwerp', 'Bremen'];
 const COLS = SECTORS.length, LANES = 3, SEA_LANE = 2;
-const LANE = [{ tag: ' Heights', z: -1900 }, { tag: '', z: -720 }, { tag: ' Roads', z: 1300 }];
+const LANE = [{ tag: ' Heights' }, { tag: '' }, { tag: ' Roads' }];
+const NODE = EU_LANES.map(l => l.map(q => LL(q[0], q[1])));
 const POINTS = [];
 for (let c = 0; c < COLS; c++) for (let l = 0; l < LANES; l++)
   POINTS.push({ i: POINTS.length, col: c, lane: l, sea: l === SEA_LANE, name: SECTORS[c] + LANE[l].tag,
-    x: (c - 3) * 1750 + Math.round(90 * Math.sin(c * 1.7 + l * 2.3)), z: LANE[l].z + Math.round(150 * Math.sin(c * 2.1 + l)),
-    owner: c < 3 ? 0 : c > 3 ? 1 : -1, prog: 0, post: null, rubble: null });
+    x: NODE[l][c + 1].x, z: NODE[l][c + 1].z, owner: c < 3 ? 0 : c > 3 ? 1 : -1, prog: 0, post: null, rubble: null });
+// ---- England: three more points on the road from the Channel ports to the Allied headquarters. They form a
+// lane of their own (lane 3). While the Axis hold Calais they can ferry ground forces across to Dover.
+const ENG_LANE = 3, ENG_NAMES = ['Southampton', 'London', 'Dover'];
+NODE.push([LL(-3.6, 50.75), LL(-1.2, 50.95), LL(-0.1, 51.5), LL(0.75, 51.22), LL(1.95, 50.8)]);
+const ENG = ENG_NAMES.map((name, c) => ({ i: POINTS.length + c, col: c, lane: ENG_LANE, eng: true, sea: false, name,
+  x: NODE[ENG_LANE][c + 1].x, z: NODE[ENG_LANE][c + 1].z, owner: 0, prog: 0, post: null, rubble: null }));
+POINTS.push(...ENG);
+function secOf(p) { return p.eng ? -1 : p.col; }             // sector a point belongs to: -1 is England
+function secName(c) { return c < 0 ? 'England' : SECTORS[c]; }
 function PT(col, lane) { return POINTS[col * LANES + lane]; }
 const CAP_R = 230, CAP_R_SEA = 330;
 const BATTLE_LEN = 720;                 // one battle (operation) lasts twelve minutes

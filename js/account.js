@@ -10,6 +10,7 @@ const Account = {
     if (!d || !d.tiers) d = this.fresh();
     for (const k of ['air', 'land', 'sea']) d.tiers[k] = Math.max(1, Math.min(MAX_TIER, d.tiers[k] | 0));
     d.credits = Math.max(0, Math.floor(+d.credits || 0));
+    if (Array.isArray(d.owners) && d.owners.length === POINTS.length - ENG.length) d.owners = d.owners.concat(ENG.map(() => 0));   // saves from before England had points
     if (!Array.isArray(d.owners) || d.owners.length !== POINTS.length) d.owners = null;
     this.data = d; return d;
   },

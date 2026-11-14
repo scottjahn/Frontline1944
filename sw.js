@@ -1,6 +1,6 @@
 // Frontline 1944 service worker: makes the whole game available offline.
 // Bump VERSION whenever the list of files changes; file contents refresh on their own (see fetch).
-const VERSION = 'v2';
+const VERSION = 'v4';
 const CACHE = 'frontline1944-' + VERSION;
 const FILES = [
   './',
