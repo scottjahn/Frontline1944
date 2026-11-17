@@ -92,7 +92,7 @@ function trackSkin() { return skin('tread', 0x1c1c18, 0x35352d, 0, 3); }
 function shipSkin(team) { return skin('hull', team === ALLY ? 0x76828e : 0x4d555e, 0x6b4a36, 0, 16); }
 function supSkin(team) { return skin('hull', team === ALLY ? 0x94a0ab : 0x626b74, 0x5a5048, 1, 12); }
 function deckSkin() { return skin('planks', 0x9c8a66, 0, 0, 6); }
-// national markings: white star for the Allies, straight-armed cross for the Axis
+// national markings: white star for the Allies, straight-armed cross (or Japan's red disc) for the Axis
 const DecalMat = [];
 function decal(g, team, size, x, y, z, face) {
   if (!DecalMat[team]) {
@@ -103,6 +103,9 @@ function decal(g, team, size, x, y, z, face) {
         c.fillStyle = '#f2f2f2'; c.beginPath();
         for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? 7.6 : 20; c[i ? 'lineTo' : 'moveTo'](32 + Math.cos(a) * r, 32 + Math.sin(a) * r); }
         c.closePath(); c.fill();
+      } else if (TH.id === 'pac') {             // red disc for Japan
+        c.fillStyle = '#f2f2f2'; c.beginPath(); c.arc(32, 32, 29, 0, 6.283); c.fill();
+        c.fillStyle = '#c8102e'; c.beginPath(); c.arc(32, 32, 25, 0, 6.283); c.fill();
       } else {
         c.fillStyle = '#f2f2f2'; c.fillRect(21, 4, 22, 56); c.fillRect(4, 21, 56, 22);
         c.fillStyle = '#111'; c.fillRect(26, 6, 12, 52); c.fillRect(6, 26, 52, 12);

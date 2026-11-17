@@ -1,13 +1,13 @@
 'use strict';
-// ---------- terrain (north-west Europe), route-finding, water, seasons, weather, icebergs ----------
-// The outlines in EU_LAND are painted onto a small canvas and turned into a signed distance field:
+// ---------- terrain (the theatre's map), route-finding, water, seasons, weather, icebergs ----------
+// The outlines in LAND (theatres.js) are painted onto a small canvas and turned into a signed distance field:
 // how far each spot is from the coast (+ inland, - out to sea). The terrain, the AI's route-finding and
 // all "is this land or water" questions read from it.
 const SDF = { w: 1400, h: 750, cell: 10, d: null };
 (function buildSDF() {
   const w = SDF.w, h = SDF.h, cv = document.createElement('canvas'); cv.width = w; cv.height = h; const c = cv.getContext('2d');
   c.fillStyle = '#fff';
-  for (const poly of EU_LAND) {
+  for (const poly of LAND) {
     c.beginPath(); poly.forEach((q, i) => { const p = LL(q[0], q[1]); c[i ? 'lineTo' : 'moveTo']((p.x + MAP.x) / SDF.cell, (p.z + MAP.z) / SDF.cell); }); c.closePath(); c.fill();
   }
   const img = c.getImageData(0, 0, w, h).data, n = w * h, BIG = 1e6;
@@ -81,7 +81,21 @@ const NAV = { c: 100, w: 2 * MAP.x / 100, h: 2 * MAP.z / 100, land: null, sea: n
     const d = sdf((i + 0.5) * NAV.c - MAP.x, (j + 0.5) * NAV.c - MAP.z);
     NAV.land[j * NAV.w + i] = d > 30 ? 1 : 0; NAV.sea[j * NAV.w + i] = d < -75 ? 1 : 0;
   }
+  // number each separate landmass, so ground forces know when their goal is across the water
+  const W = NAV.w; NAV.isl = new Int16Array(n).fill(-1); let id = 0; const q = new Int32Array(n);
+  for (let s = 0; s < n; s++) {
+    if (!NAV.land[s] || NAV.isl[s] >= 0) continue;
+    let h = 0, t = 0; q[t++] = s; NAV.isl[s] = id;
+    while (h < t) {
+      const c = q[h++], i = c % W, j = (c / W) | 0;
+      for (const nc of [i > 0 ? c - 1 : -1, i < W - 1 ? c + 1 : -1, j > 0 ? c - W : -1, j < NAV.h - 1 ? c + W : -1])
+        if (nc >= 0 && NAV.land[nc] && NAV.isl[nc] < 0) { NAV.isl[nc] = id; q[t++] = nc; }
+    }
+    id++;
+  }
 })();
+// which landmass a place is on (-1: open water, nowhere near land)
+function islandOf(x, z) { const c = navNear(navCell(x, z), NAV.land); return c < 0 ? -1 : NAV.isl[c]; }
 function navCell(x, z) { return clamp(Math.floor((z + MAP.z) / NAV.c), 0, NAV.h - 1) * NAV.w + clamp(Math.floor((x + MAP.x) / NAV.c), 0, NAV.w - 1); }
 function navNear(c, pass) {             // the closest usable cell to c
   if (pass[c]) return c;
@@ -132,12 +146,7 @@ function lerp(a, b, k) { return a + (b - a) * k; }
 function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
 function rnd(a, b) { return a + Math.random() * (b - a); }
 
-const SEASONS = [
-  { name: 'Summer', icon: '☀', desc: 'Heat wave: the sea is rising', sky: 0x8ec9f0, fog: 0.00028, water: 3.5, tint: [0.80, 0.74, 0.40], tk: 0.18, light: 1.1, tree: 0x2f6b2a, vis: 1, reload: 1 },
-  { name: 'Fall', icon: '🍂', desc: 'Thick fog: hard to see anything', sky: 0xb5b2a8, fog: 0.0042, water: 0, tint: [0.70, 0.42, 0.14], tk: 0.45, light: 0.75, tree: 0xb8621b, vis: 0.33, reload: 1 },
-  { name: 'Winter', icon: '❄', desc: 'Ice: icebergs drift in the shipping lanes', sky: 0xcfdde8, fog: 0.0008, water: -0.4, tint: [0.95, 0.96, 1.0], tk: 0.88, light: 0.95, tree: 0xe8eef2, vis: 0.9, reload: 1 },
-  { name: 'Rainy Season', icon: '🌧', desc: 'Downpour: crews are miserable and slow', sky: 0x5f6b75, fog: 0.0017, water: 1.2, tint: [0.18, 0.46, 0.2], tk: 0.3, light: 0.6, tree: 0x2c7a34, vis: 0.7, reload: 1.35 }
-];
+const SEASONS = TH.seasons;
 const SEASON_LEN = 75, SEASON_FADE = 9;
 
 const World = {
@@ -232,7 +241,7 @@ const World = {
     if (this.seasonT >= SEASON_LEN) {
       this.seasonT = 0; this.season = (this.season + 1) % SEASONS.length;
       if (this.onSeason) this.onSeason(this.info);
-      if (this.info.name === 'Winter') this.spawnIcebergs();
+      if (this.info.ice) this.spawnIcebergs();
     }
     const s = this.info, c = this.cur, k = Math.min(1, dt / SEASON_FADE * 3);
     c.sky.lerp(new THREE.Color(s.sky), k); c.tree.lerp(new THREE.Color(s.tree), k);
@@ -242,7 +251,7 @@ const World = {
     this.water = c.water; this.vis = c.vis; this.reload = s.reload;
     if (this.seasonT < SEASON_FADE * 2) { this.tintT = (this.tintT || 0) + dt; if (this.tintT > 0.15) { this.tintT = 0; this.applyTint(); } }
 
-    const winter = s.name === 'Winter';
+    const winter = !!s.ice;
     for (let i = this.icebergs.length - 1; i >= 0; i--) {
       const b = this.icebergs[i];
       b.k = clamp(b.k + (winter ? dt / 6 : -dt / 8), 0, 1);
@@ -272,7 +281,7 @@ const World = {
     this.hemi.intensity = 0.75 * c.light; this.sun.intensity = 0.8 * c.light;
     this.treeMat.color.copy(c.tree);
     this.waterMesh.position.set(cam.position.x, this.water + Math.sin(time * 0.8) * 0.12, cam.position.z);
-    const raining = s.name === 'Rainy Season' && this.seasonT > 2, snowing = s.name === 'Winter' && this.seasonT > 2;
+    const raining = s.rain && this.seasonT > 2, snowing = s.snow && this.seasonT > 2;
     this.rain.visible = raining; this.snow.visible = snowing;
     if (raining) {
       const a = this.rain.geometry.attributes.position, o = this.rainOff;

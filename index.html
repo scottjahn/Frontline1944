@@ -78,6 +78,10 @@
   .tabs { display:flex; gap:6px; margin:14px 0; flex-wrap:wrap; }
   .tab { background:transparent; color:var(--ink); border:1px solid var(--line); border-radius:4px; padding:7px 16px; font:inherit; font-weight:700; cursor:pointer; letter-spacing:.06em; text-transform:uppercase; font-size:12px; }
   .tab.on { background:var(--amber); color:#1a1a12; border-color:var(--amber); }
+  .tab:disabled { opacity:.4; cursor:not-allowed; }
+  #frontTabs { margin:12px 0 0; }
+  #frontTabs .tab { text-transform:none; letter-spacing:.02em; font-size:13px; padding:8px 14px; text-align:left; }
+  #frontTabs .tab small { display:block; font-weight:400; font-size:11px; opacity:.8; }
   .help { margin-top:18px; font-size:12.5px; color:#cfcab4; line-height:1.9; }
   .shophead { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; }
   #shopMoney { font-size:24px; font-weight:800; color:var(--amber); }
@@ -220,6 +224,7 @@
 <div class="screen on" id="menu">
   <div class="box">
     <div class="shophead"><h1 id="menuTitle">Frontline 1944</h1><div id="acct"></div></div>
+    <div class="tabs" id="frontTabs"></div>
     <div class="sub" id="menuSub"></div>
     <canvas id="camp" width="1120" height="600"></canvas>
     <div id="sectorInfo"></div>
@@ -228,7 +233,7 @@
     <div id="armory"></div>
     <div class="row" id="menuBtns"></div>
     <div class="help">
-      <b>The campaign.</b> Seven sectors along the Channel and North Sea coast lie between your headquarters in England and theirs in Berlin, each with two points on land and one at sea. Destroy a point's command post, then hold the ground with tanks and infantry (or the water with warships) to capture it. Points fall in order, so the front line moves one step at a time. A headquarters can only be attacked once its home sector is breached. England has three points of its own (Dover, London, Southampton): while the Axis hold Calais they ferry troops across to Dover, and if all three fall the Allied headquarters is open.<br>
+      <span id="helpCampaign"></span>
       <b>Battles.</b> Each battle lasts twelve minutes and picks up where the last one left off. Kills and captures earn credits, paid out when the battle ends. Spend them in the Armory on permanent unlock tiers. The Axis field whatever tiers you have unlocked.<br>
       <div class="th">Left thumb: drag to drive (planes: up/down is throttle, they fly where you aim). Right thumb: drag anywhere to aim, or hold <kbd>Fire</kbd> and drag to aim while shooting.<br>
       <kbd>Zoom</kbd> locks onto the nearest enemy &nbsp;·&nbsp; <kbd>Shop</kbd> buys escorts and buildings &nbsp;·&nbsp; <kbd>Map</kbd> opens this map &nbsp;·&nbsp; <kbd>Swap</kbd> takes over another Allied vehicle. Landscape plays best.</div>
@@ -261,6 +266,7 @@
 </div>
 
 <script src="js/vendor/three.min.js"></script>
+<script src="js/theatres.js"></script>
 <script src="js/defs.js"></script>
 <script src="js/account.js"></script>
 <script src="js/models.js"></script>

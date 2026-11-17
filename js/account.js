@@ -3,15 +3,18 @@
 const SAVE_KEY = 'frontline1944.save.v1';
 const Account = {
   data: null,
-  fresh() { return { credits: 0, tiers: { air: 1, land: 1, sea: 1 }, battles: 0, wins: 0, kills: 0, campaigns: 0, owners: null }; },
+  fresh() { return { credits: 0, tiers: { air: 1, land: 1, sea: 1 }, battles: 0, wins: 0, kills: 0, campaigns: 0, camps: {} }; },
   load() {
     let d = null;
     try { d = JSON.parse(localStorage.getItem(SAVE_KEY)); } catch (e) { d = null; }
     if (!d || !d.tiers) d = this.fresh();
     for (const k of ['air', 'land', 'sea']) d.tiers[k] = Math.max(1, Math.min(MAX_TIER, d.tiers[k] | 0));
     d.credits = Math.max(0, Math.floor(+d.credits || 0));
-    if (Array.isArray(d.owners) && d.owners.length === POINTS.length - ENG.length) d.owners = d.owners.concat(ENG.map(() => 0));   // saves from before England had points
-    if (!Array.isArray(d.owners) || d.owners.length !== POINTS.length) d.owners = null;
+    // the state of the front is kept per theatre. Saves from before there were theatres start the new
+    // (pushed-back) campaign but keep their credits and unlocks.
+    if (!d.camps || typeof d.camps !== 'object') d.camps = {};
+    delete d.owners;
+    const o = d.camps[TH.id]; if (!Array.isArray(o) || o.length !== POINTS.length) d.camps[TH.id] = null;
     this.data = d; return d;
   },
   save() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(this.data)); } catch (e) { } },
@@ -29,9 +32,9 @@ const Account = {
     const d = this.data;
     d.credits += res.credits; d.battles++; d.kills += res.kills; if (res.win) d.wins++;
     if (res.campaignWon) d.campaigns++;
-    d.owners = res.owners; this.save();
+    d.camps[TH.id] = res.owners; this.save();
   },
   reset() { this.data = this.fresh(); this.save(); }
 };
 Account.load();
-if (Account.data.owners) POINTS.forEach((p, i) => { p.owner = Account.data.owners[i]; });
+if (Account.data.camps[TH.id]) POINTS.forEach((p, i) => { p.owner = Account.data.camps[TH.id][i]; });

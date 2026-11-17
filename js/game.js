@@ -92,7 +92,7 @@ function spawn(id, team, x, z, o) {
   o = o || {}; const d = DEFS[id];
   const u = {
     id: ++uid, def: d, team, hp: d.hp, maxHp: d.hp, pos: V(), prev: V(), vel: V(), steer: V(),
-    yaw: o.yaw !== undefined ? o.yaw : (team === ALLY ? Math.PI / 2 : -Math.PI / 2), pitch: 0, roll: 0, speed: 0,
+    yaw: o.yaw !== undefined ? o.yaw : FACE[team] * Math.PI / 2, pitch: 0, roll: 0, speed: 0,
     throttle: 0, turnIn: 0, throttleT: 1, aimYaw: 0, cdGun: rnd(0, 1), cdAlt: rnd(1, 4), cdAA: 0,
     target: null, aaTarget: null, thinkT: rnd(0, 0.6), aaT: rnd(0, 0.5), breakT: 0, breakPt: V(), patrol: null,
     bombQ: 0, bombT: 0, dead: false, built: o.build ? 0 : 1, fxT: rnd(0, 1), mesh: buildModel(d, team), people: [], raid: !!o.raid,
@@ -129,8 +129,8 @@ function behind(team, lane, col) {
   const N = NODE[lane], a = N[col + 1], b = N[team === ALLY ? col : col + 2], l = Math.hypot(b.x - a.x, b.z - a.z) || 1;
   return [(b.x - a.x) / l, (b.z - a.z) / l];
 }
-// where a side falls back to when it holds nothing in a lane. The Allies have no foothold on the Continent
-// then: their ground forces have to land at the first point in France.
+// where a side falls back to when it holds nothing in a lane. The Allies have no foothold across the water
+// then: their ground forces have to land at the first point of the chain.
 function homeSpot(team, lane) {
   if (lane !== SEA_LANE && team === ALLY) { const p = PT(0, lane); return { x: p.x, z: p.z, lane, col: 0 }; }
   const n = NODE[lane][team === ALLY ? 0 : COLS + 1]; return { x: n.x, z: n.z, lane, col: team === ALLY ? 0 : COLS - 1 };
@@ -165,8 +165,9 @@ function canCap(p, team) {
   if (p.eng) return team === ALLY ? (p.col === 0 || ENG[p.col - 1].owner === ALLY) : (p.col === ENG.length - 1 ? calaisHeld() : ENG[p.col + 1].owner === AXIS);
   return team === ALLY ? (p.col === 0 || PT(p.col - 1, p.lane).owner === ALLY) : (p.col === COLS - 1 || PT(p.col + 1, p.lane).owner === AXIS);
 }
-// ---- England: the Axis can only invade while they hold Calais
-function calaisHeld() { return PT(4, 1).owner === AXIS; }
+// ---- the Allied homeland: the Axis can only invade while they hold the invasion point (Calais / Wake)
+function invasionOpen() { return PT(INVADE.col, INVADE.lane).owner === AXIS; }
+const calaisHeld = invasionOpen;
 // the next English point a side has to take (Allies work outward from home, the Axis inland from Dover); null = it holds them all
 function engObjective(team) {
   if (team === ALLY) { for (const p of ENG) if (p.owner !== ALLY) return p; }
@@ -176,18 +177,41 @@ function engObjective(team) {
 // where the Allies muster in England: the last point they still hold before the fighting, or the home base
 function engStage() {
   const o = engObjective(ALLY); if (!o) return ENG[ENG.length - 1];
-  return o.col > 0 ? ENG[o.col - 1] : { x: BASE[ALLY].x + 260, z: BASE[ALLY].z, lane: ENG_LANE, col: 0 };
+  return o.col > 0 ? ENG[o.col - 1] : { x: BASE[ALLY].x + FACE[ALLY] * 260, z: BASE[ALLY].z, lane: ENG_LANE, col: 0 };
 }
 function engThreat() { return ENG.some(p => p.owner !== ALLY) || units.some(u => u.team === AXIS && u.def.domain === 'land' && u.lane === ENG_LANE); }
 function beachNear(x, z) {             // downhill from a place to the nearest shore; n points inland
   let g = 0; while (sdf(x, z) > 0 && g++ < 400) { const n = sdGrad(x, z); x -= n[0] * 10; z -= n[1] * 10; }
   return { x, z, n: sdGrad(x, z) };
 }
-// landing craft carry Axis ground forces from Calais across the strait to the beaches below Dover
+// landing craft carry Axis ground forces from the invasion point to the beaches of the Allied homeland
 function ferry(ids) {
-  const u = sealift(AXIS, ids, ENG[ENG.length - 1], PT(4, 1));
-  msg('WARNING: Axis landing craft are crossing from Calais to Dover!', 'bad');
+  const src = PT(INVADE.col, INVADE.lane), dst = ENG[ENG.length - 1];
+  const u = sealift(AXIS, ids, dst, INVADE.fromSea ? null : src);
+  msg(`WARNING: Axis landing craft are ${INVADE.fromSea ? 'closing on' : 'crossing from ' + src.name + ' to'} ${dst.name}!`, 'bad');
   return u;
+}
+// ---- island warfare (the Pacific): ground forces cannot drive from one island to the next, so they go ashore
+// on a beach of the island they are attacking. The beach faces the way the landing comes from.
+function beachhead(o, from) {
+  let dx = from.x - o.x, dz = from.z - o.z; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l;
+  let x = o.x, z = o.z, g = 0;
+  while (sdf(x, z) > 0 && g++ < 400) { x += dx * 10; z += dz * 10; }
+  return { x: x - dx * 110, z: z - dz * 110 };
+}
+// where ground forces of a lane enter the fight: p = the spot, assault = landing on an enemy island, o = what they attack
+function landZone(team, lane, col) {
+  const sp = stage(team, lane, col);
+  if (!TH.islands) return { p: sp };
+  const o = reach(team, lane) || (team === ALLY ? { x: BASE[AXIS].x, z: BASE[AXIS].z, lane, col: COLS - 1 } : null);
+  if (!o) return { p: sp };
+  const held = sp.owner === team;
+  // the computer sends a third of its ground forces to stiffen the island it already holds; the player
+  // lands when they pick a sector the Allies do not hold yet
+  const assault = !held || (col === undefined ? Math.random() < 0.65 : !POINTS.some(p => secOf(p) === col && p.owner === team));
+  if (!assault || (held && islandOf(sp.x, sp.z) === islandOf(o.x, o.z))) return { p: sp };
+  const b = beachhead(o, held ? sp : NODE[lane][team === ALLY ? 0 : COLS + 1]);
+  return { p: { x: b.x, z: b.z, lane, col: o.col }, assault: true, o };
 }
 // a headquarters can only be hurt once the enemy holds ground in its home sector
 function hqOpen(team) { const c = team === ALLY ? 0 : COLS - 1; return POINTS.some(p => !p.eng && p.col === c && p.owner === 1 - team) || (team === ALLY && ENG[0].owner === AXIS); }
@@ -236,13 +260,13 @@ function launchWing(c) {
 // Where things enter the battle. Combat units arrive just behind their side's front (or behind sector `col` when the
 // player picks one); supply vehicles work from the home base. Aircraft use the home runway, a carrier deck, or arrive airborne.
 function spawnAt(id, team, col) {
-  const d = DEFS[id], b = BASE[team], s = team === ALLY ? 1 : -1, ap = AIRPORT[team], rear = !!NONCOMBAT[d.role];
+  const d = DEFS[id], b = BASE[team], s = team === ALLY ? 1 : -1, f = FACE[team], ap = AIRPORT[team], rear = !!NONCOMBAT[d.role];
   if (d.domain === 'air') {
-    if (rear || col === -1) {             // supply flights, and anyone deploying in England, use the home runway
-      if (!airportOf(team)) return spawn(id, team, clamp(ap.x - s * 900, -MAP.x, MAP.x), ap.z + rnd(-200, 200), { alt: 160 + rnd(0, 40) });   // airfield lost: fly in from the rear
+    if (rear || col === -1) {             // supply flights, and anyone deploying in the homeland, use the home runway
+      if (!airportOf(team)) return spawn(id, team, clamp(ap.x - f * 900, -MAP.x, MAP.x), ap.z + rnd(-200, 200), { alt: 160 + rnd(0, 40) });   // airfield lost: fly in from the rear
       if (d.heli) { const x = ap.x + 62 + rnd(-6, 6), z = ap.z - 29 + rnd(-6, 6); return spawn(id, team, x, z, { alt: terrainH(x, z) + 2.3 }); }
-      const x = ap.x - s * 150, z = ap.z + rnd(-7, 7);
-      const u = spawn(id, team, x, z, { alt: terrainH(x, z) + (d.gear || 1.5) }); u.takeoff = true; u.speed = 0; return u;
+      const x = ap.x - f * 150, z = ap.z + rnd(-7, 7);
+      const u = spawn(id, team, x, z, { alt: terrainH(x, z) + (d.gear || 1.5), yaw: f * Math.PI / 2 }); u.takeoff = true; u.speed = 0; return u;
     }
     const sp = stage(team, col === undefined ? Math.floor(Math.random() * LANES) : 1, col);
     if (col !== undefined) { const c = carrierOf(team, sp, 3200); if (c) return deckLaunch(id, c, 0); }
@@ -251,10 +275,17 @@ function spawnAt(id, team, col) {
     return spawn(id, team, x, z, { alt: d.heli ? ground(x, z) + 60 : 170 + rnd(0, 40), yaw: Math.atan2(sp.x - x, sp.z - z) });
   }
   if (d.domain === 'land') {
-    if (rear) { const q = landSpot(b.x + s * 190, b.z, 0, 110); return spawn(id, team, q[0], q[1]); }
+    if (rear) { const q = landSpot(b.x + f * 190, b.z, 0, 110); return spawn(id, team, q[0], q[1]); }
     let lane = Math.random() < 0.5 ? 0 : 1, sp = col === -1 ? engStage() : stage(team, lane, col);
     if (col === -1) lane = ENG_LANE;
     else if (col !== undefined) { const o = stage(team, 1 - lane, col); if ((o.col - sp.col) * s > 0) { sp = o; lane = 1 - lane; } }
+    if (col !== -1) {
+      const lz = landZone(team, lane, col);
+      if (lz.assault) {                   // amphibious landing on the beach of the island under attack
+        const q = landSpot(lz.p.x, lz.p.z, 0, 70), u = spawn(id, team, q[0], q[1], { yaw: Math.atan2(lz.o.x - q[0], lz.o.z - q[1]) });
+        u.lane = lane; u.landedAt = lz.o; TC.set(q[0], World.water, q[1]); splashFx(TC, 8); return u;
+      }
+    }
     const bv = behind(team, sp.lane, sp.col), q = landSpot(sp.x, sp.z, 50, 160, bv);
     const u = spawn(id, team, q[0], q[1], { yaw: Math.atan2(-bv[0], -bv[1]) }); u.lane = lane; return u;
   }
@@ -270,7 +301,8 @@ function despawn(u) {
 const CHUTE_GEO = new THREE.SphereGeometry(7, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2);
 const CHUTE_MAT = new THREE.MeshLambertMaterial({ color: 0xf2efe2, side: THREE.DoubleSide });
 function airlift(team, ids) {
-  const lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane), bv = behind(team, sp.lane, sp.col), q = landSpot(sp.x, sp.z, 60, 220, bv);
+  const lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane), bv = behind(team, sp.lane, sp.col), lz = landZone(team, lane);
+  const q = lz.assault ? landSpot(lz.p.x, lz.p.z, 0, 90) : landSpot(sp.x, sp.z, 60, 220, bv);
   const cx = v => clamp(v, -MAP.x - 100, MAP.x + 100), cz = v => clamp(v, -MAP.z - 100, MAP.z + 100);
   const u = spawn(team === ALLY ? 'c54' : 'me323', team, cx(q[0] + bv[0] * 1700), cz(q[1] + bv[1] * 1700), { alt: 190, yaw: Math.atan2(-bv[0], -bv[1]) });
   u.cargo = ids; u.dropLane = lane; u.dropPt = V().set(q[0], terrainH(q[0], q[1]) + 100, q[1]);
@@ -289,25 +321,26 @@ function paradrop(u) {
 }
 // to: the place to land near (default: the side's foremost coast town). from: a held port to sail from (default: in from the open sea)
 function sealift(team, ids, to, from) {
-  const b = beachNear((to || stage(team, 1)).x, (to || stage(team, 1)).z), n = b.n; let sx, sz;
+  to = to || landZone(team, 1).p;
+  const b = beachNear(to.x, to.z), n = b.n; let sx, sz;
   if (from) { const f = beachNear(from.x, from.z), q = seaSpot(f.x - f.n[0] * 200, f.z - f.n[1] * 200, 0, 120); sx = q[0]; sz = q[1]; }
   else { let k = 900; while (k > 200 && sdf(b.x - n[0] * k, b.z - n[1] * k) > -100) k -= 100; sx = b.x - n[0] * k; sz = b.z - n[1] * k; }
   const u = spawn(team === ALLY ? 'lst' : 'mfp', team, sx, sz, { yaw: Math.atan2(b.x - sx, b.z - sz) });
-  u.cargo = ids; u.landLane = to && to.eng ? ENG_LANE : 1;
+  u.cargo = ids; u.landLane = to.eng ? ENG_LANE : to.lane === 0 ? 0 : 1;
   u.beach = { x: b.x - n[0] * 50, z: b.z - n[1] * 50 }; u.landPt = { x: b.x + n[0] * 35, z: b.z + n[1] * 35 }; u.exit = { x: sx, z: sz };
   return u;
 }
 function unload(u) {
   for (const id of u.cargo) { const q = landSpot(u.landPt.x, u.landPt.z, 0, 45); spawn(id, u.team, q[0], q[1], { yaw: u.yaw }).lane = u.landLane; }
   if (u.team === ALLY) msg(`${u.def.name} landed ${u.cargo.length} units on the beach`, 'good');
-  else if (u.landLane === ENG_LANE) msg(`Axis troops are ashore in England! ${u.cargo.length} units landed near Dover.`, 'bad');
+  else if (u.landLane === ENG_LANE) msg(`Axis troops are ashore in ${HOME_NAME}! ${u.cargo.length} units landed near ${ENG[ENG.length - 1].name}.`, 'bad');
   u.cargo = null;
 }
 function requisition(id, team) {
   const d = DEFS[id];
   if (d.domain !== 'land' || d.role === 'cargo') return spawnAt(id, team);
   const landers = units.filter(u => u.team === team && u.def.role === 'lander').length;
-  if (team === AXIS && calaisHeld() && landers < 2 && Math.random() < 0.3) return ferry([id, 'grenadier']);          // invade England
+  if (team === AXIS && invasionOpen() && landers < 2 && Math.random() < 0.3) return ferry([id, 'grenadier']);        // invade the Allied homeland
   if (team === ALLY && engThreat() && Math.random() < 0.45) return spawnAt(id, team, -1);                           // home forces turn out to meet them
   if (Math.random() < 0.3 && !landers)
     return sealift(team, [id].concat(team === ALLY ? ['troops', 'jeep'] : ['grenadier', 'kubel']));
@@ -753,12 +786,38 @@ function aiHeli(u, dt) {
   if (l > 1) T1.multiplyScalar(Math.min(d.speed, l * 0.8) / l);
   u.hv.set(T1.x, clamp((gy - u.pos.y) * 0.8, -d.speed * 0.4, d.speed * 0.5), T1.z);
 }
+// Island warfare: when a ground unit's goal lies across the water it cannot drive there. It takes any point on
+// its own island that is still open to it, otherwise it holds the nearest friendly point. Idle garrisons far
+// behind the front are shipped out after a while (refunded to their commander) so they don't clog the force limit.
+function garrison(u, dt, jx, jz, gx, gz) {
+  u.hold = null;
+  const here = islandOf(u.pos.x, u.pos.z);
+  if (here < 0 || here === islandOf(gx, gz)) { u.idle = 0; return true; }
+  let best = null, bd = 1e9, own = null, od = 1e9;
+  for (const p of POINTS) {
+    if (p.sea || p.isl !== here) continue;
+    const dd = Math.hypot(p.x - u.pos.x, p.z - u.pos.z);
+    if (p.owner !== u.team && canCap(p, u.team) && dd < bd) { bd = dd; best = p; }
+    if (p.owner === u.team && dd < od) { od = dd; own = p; }
+  }
+  if (best) { u.lane = best.eng ? ENG_LANE : best.lane; u.hold = { x: best.x + jx, z: best.z + jz, stop: 20 }; u.idle = 0; return true; }
+  const p = own || { x: u.pos.x, z: u.pos.z };
+  u.hold = { x: p.x + jx * 2, z: p.z + jz * 2, stop: 40 };
+  u.idle = u.target ? 0 : (u.idle || 0) + dt;
+  if (u.idle > 90 && !u.mine) {
+    const sp = stage(u.team, u.lane === ENG_LANE ? 1 : u.lane), front = islandOf(sp.x, sp.z) === here;
+    let mates = 0; for (const v of units) if (v.team === u.team && v.def.domain === 'land' && v.idle > 30) mates++;
+    if (!front || mates > 8) { teamAI[u.team].budget += (u.def.aiCost || u.def.cost) * 0.5; despawn(u); return false; }
+    u.idle = 60;
+  }
+  return true;
+}
 function aiLand(u, dt) {
   const d = u.def, t = u.target; let gx, gz, stop;
   if (t) { gx = t.pos.x; gz = t.pos.z; stop = d.gun.range * 0.7; }
   else if (d.role === 'cargo') {       // supply truck: base <-> depot up the road
     if (!u.route) {
-      const b = BASE[u.team], s = u.team === ALLY ? 1 : -1, dp = HOME[u.team].depot;
+      const b = BASE[u.team], s = FACE[u.team], dp = HOME[u.team].depot;
       u.route = { i: 1, loaded: false, pts: [{ x: b.x + s * 170, z: b.z + rnd(-60, 60) }, { x: dp.x + rnd(-60, 60), z: dp.z + rnd(-60, 60) }] };
     }
     const r = u.route, p = r.pts[r.i]; gx = p.x; gz = p.z; stop = 0;
@@ -769,10 +828,14 @@ function aiLand(u, dt) {
     const jx = (u.id % 5 - 2) * 30, jz = ((u.id >> 2) % 5 - 2) * 30, eng = u.lane === ENG_LANE;
     const o = eng ? engObjective(u.team) : reach(u.team, u.lane);
     if (o) { gx = o.x + jx; gz = o.z + jz; stop = 20; }
-    else if (eng && u.team === ALLY) { const p = ENG[ENG.length - 1]; gx = p.x + jx * 2; gz = p.z + jz * 2; stop = 30; }   // England is secure: stand guard at Dover
-    else if (eng) { const b = BASE[ALLY]; gx = b.x; gz = b.z + jx; stop = 60; }                                   // England has fallen: on to the Allied headquarters
-    else if (u.team === ALLY) { const b = BASE[AXIS]; gx = b.x; gz = b.z + jx; stop = 60; }      // lane won: on to Berlin
-    else { const p = PT(0, u.lane); gx = p.x + jx; gz = p.z + jz; stop = 40; }                   // the Axis cannot cross the Channel: dig in on the coast
+    else if (eng && u.team === ALLY) { const p = ENG[ENG.length - 1]; gx = p.x + jx * 2; gz = p.z + jz * 2; stop = 30; }   // the homeland is secure: stand guard at the beach
+    else if (eng) { const b = BASE[ALLY]; gx = b.x; gz = b.z + jx; stop = 60; }                                   // the homeland has fallen: on to the Allied headquarters
+    else if (u.team === ALLY) { const b = BASE[AXIS]; gx = b.x; gz = b.z + jx; stop = 60; }      // lane won: on to the Axis capital
+    else { const p = PT(0, u.lane); gx = p.x + jx; gz = p.z + jz; stop = 40; }                   // the Axis cannot cross the water: dig in on the coast
+    if (TH.islands) {
+      if (!garrison(u, dt, jx, jz, gx, gz)) return;
+      if (u.hold) { gx = u.hold.x; gz = u.hold.z; stop = u.hold.stop; }
+    }
   }
   const dist = Math.hypot(gx - u.pos.x, gz - u.pos.z);
   navTo(u.pos.x, u.pos.z, gx, gz, false, NV);
@@ -983,6 +1046,7 @@ function setOwner(p, team) {
 }
 function setupPoints() {
   for (const p of POINTS) {
+    p.isl = islandOf(p.x, p.z);
     p.y = p.sea ? 0 : terrainH(p.x, p.z);
     p.beam = new THREE.Mesh(BEAM_GEO, new THREE.MeshBasicMaterial({ color: ownerHex(p.owner), transparent: true, opacity: 0.17, depthWrite: false, side: THREE.DoubleSide }));
     p.beam.position.set(p.x, p.y + 175, p.z); scene.add(p.beam);
@@ -997,9 +1061,9 @@ function capture(p, team, byPlayer) {
   if (team === ALLY) {
     stats.caps++;
     if (byPlayer) { stats.credits += 250; stats.capCr += 250; money += 400; }
-    banner(p.name + (p.eng ? ' retaken' : ' captured'), p.eng ? 'The invaders are pushed back toward the sea' : 'The front line moves east');
+    banner(p.name + (p.eng ? ' retaken' : ' captured'), p.eng ? 'The invaders are pushed back toward the sea' : TH.str.advance);
     msg(`${p.name} is ours!` + (byPlayer ? '  +$400 · +250 credits' : ''), 'gold');
-  } else { banner(p.name + ' lost', p.eng ? 'The invasion of England advances' : 'The Axis push the front line west'); msg(`The Axis have taken ${p.name}!`, 'bad'); }
+  } else { banner(p.name + ' lost', p.eng ? `The invasion of ${HOME_NAME} advances` : TH.str.retreat); msg(`The Axis have taken ${p.name}!`, 'bad'); }
 }
 function updatePoints(dt) {
   capT -= dt; if (capT > 0) return; capT = 0.5;
@@ -1052,7 +1116,7 @@ const GRIPES = [
 function economy(dt) {
   incomeT -= dt;
   if (incomeT <= 0) { incomeT = INCOME_PERIOD; lastIncome = incomeOf(ALLY); money += lastIncome; }
-  if (World.info.name === 'Rainy Season') { crewT -= dt; if (crewT <= 0) { crewT = rnd(9, 15); msg(GRIPES[Math.floor(Math.random() * GRIPES.length)], 'crew'); } }
+  if (World.info.rain) { crewT -= dt; if (crewT <= 0) { crewT = rnd(9, 15); msg(GRIPES[Math.floor(Math.random() * GRIPES.length)], 'crew'); } }
 }
 
 // -------------------------------------------------------------- player
@@ -1185,7 +1249,7 @@ function buy(id, command) {
   if (isB) { const u = build(ALLY, id); if (!u) return; money -= d.cost; msg(`Construction started: ${d.name}`, 'good'); renderShop(); return; }
   money -= d.cost;
   if (nc) {
-    if (d.role === 'lander') { sealift(ALLY, d.cargo.slice()); msg(`${d.name} convoy is sailing in from the south`, 'good'); }
+    if (d.role === 'lander') { sealift(ALLY, d.cargo.slice()); msg(`${d.name} convoy is heading for the beaches`, 'good'); }
     else { spawnAt(id, ALLY); msg(`${d.name} has started its supply runs`, 'good'); }
     renderShop(); return;
   }
@@ -1199,7 +1263,9 @@ function toggleShop(on) {
 }
 // ---- campaign map: shown before the battle, after losing a vehicle, and on M (paused)
 function frontCol() { let c = 0; for (const p of POINTS) if (!p.eng && p.owner === ALLY) c = Math.max(c, p.col); return c; }
-function canDeployIn(c) { return c <= 0 || POINTS.some(p => secOf(p) === c && p.owner === ALLY); }
+function canDeployIn(c) { return c <= 0 || POINTS.some(p => secOf(p) === c && p.owner === ALLY) || (TH.islands && c === frontCol() + 1 && c < COLS); }
+// islands: picking a sector the Allies hold nothing in means an amphibious landing there
+function isLanding(c) { return TH.islands && c >= 0 && !POINTS.some(p => secOf(p) === c && p.owner === ALLY); }
 function secPoints(c) { return POINTS.filter(p => secOf(p) === c); }
 function openMenu() {
   if (!canDeployIn(selCol)) selCol = frontCol();
@@ -1214,10 +1280,18 @@ function renderMenu() {
   $('menuTitle').textContent = mode === 'dead' ? 'Vehicle lost' : mode === 'map' ? 'Campaign map' : 'Frontline 1944';
   $('menuSub').textContent = mode === 'dead' ? 'The wreck stays where it fell. Pick a sector on the map and a vehicle to rejoin the battle.'
     : mode === 'map' ? 'The battle is paused. Redeploy to another sector, visit the Armory, or end the operation and bank your credits.'
-      : 'Push the front line east, sector by sector, until the Axis headquarters falls. Click a sector on the map, then choose a vehicle.';
+      : TH.str.goal;
+  const ft = $('frontTabs'); ft.innerHTML = '';
+  for (const k of Object.keys(THEATRES)) {
+    const T = THEATRES[k], b = document.createElement('button'); b.className = 'tab' + (k === TH.id ? ' on' : '');
+    b.innerHTML = `${T.title}<small></small>`; b.querySelector('small').textContent = T.blurb;
+    b.disabled = mode !== 'menu' && k !== TH.id; if (b.disabled) b.title = 'End the operation first';
+    b.onclick = () => { if (k !== TH.id && mode === 'menu') switchTheatre(k); }; ft.append(b);
+  }
   $('acct').innerHTML = `<b>${a.credits.toLocaleString()}</b> credits` + (mode !== 'menu' ? ` <i>+${stats.credits.toLocaleString()} this battle</i>` : '') + `<small>${a.battles} battles · ${a.wins} won · ${a.kills} kills · ${a.campaigns} campaigns won</small>`;
   const sec = secPoints(selCol), held = sec.filter(p => p.owner === ALLY).length;
-  $('sectorInfo').innerHTML = (selCol < 0 ? 'Deploying in <b>England</b>' : `Deploying in the <b>${SECTORS[selCol]}</b> sector`) + ` · ${held} of ${sec.length} points held` + (selCol === frontCol() ? ' · front line' : '') + (selCol < 0 ? ' · home runway and harbour' : '');
+  $('sectorInfo').innerHTML = isLanding(selCol) ? `Landing on <b>${SECTORS[selCol]}</b> · ground forces make an amphibious assault on its beach; ships and aircraft join the battle offshore`
+    : (selCol < 0 ? `Deploying in <b>${HOME_NAME}</b>` : `Deploying in the <b>${SECTORS[selCol]}</b> sector`) + ` · ${held} of ${sec.length} points held` + (selCol === frontCol() ? ' · front line' : '') + (selCol < 0 ? ' · home runway and harbour' : '');
   const tabs = $('menuTabs'); tabs.innerHTML = '';
   for (const t of ['Deploy', 'Armory']) {
     const b = document.createElement('button'); b.className = 'tab' + (t === menuTab ? ' on' : ''); b.textContent = t;
@@ -1274,6 +1348,7 @@ function deploy(id) {
   if (redeploy) deployCd = 20;
   state = 'playing'; $('menu').classList.remove('on'); $('shop').classList.remove('on'); $('hud').style.display = 'block';
   if (first) { const s = World.info; banner(secName(selCol) + (selCol < 0 ? '' : ' sector'), `${s.name}. ${s.desc}`); } else msg(`Deployed in ${DEFS[id].name}, ${secName(selCol)}`, 'good');
+  if (u.landedAt) msg(`Amphibious landing! You are ashore below ${u.landedAt.name || 'the enemy capital'}.`, 'gold');
   const cv = renderer.domElement; if (!touchMode && cv.requestPointerLock) { try { const r = cv.requestPointerLock(); if (r && r.catch) r.catch(() => { }); } catch (e) { } }
 }
 const startAs = deploy;
@@ -1409,9 +1484,8 @@ function drawMini() {
   }
 }
 // ---- campaign map: the whole theatre from above, drawn from the same outlines the terrain is built from
-const EU_LABELS = [['ENGLAND', -1.4, 52.4, 15], ['FRANCE', 2.6, 47.3, 15], ['GERMANY', 10.2, 50.6, 15], ['IRELAND', -8, 53.2, 12], ['English Channel', -2.6, 50.28, 10], ['North Sea', 3.2, 54.2, 12], ['Bay of Biscay', -5.5, 46.9, 10], ['Baltic', 14.6, 54.9, 10]];
 let euBg = null;
-function euXY(lon, lat, w, h) { return [(lon - EU.lon0) / (EU.lon1 - EU.lon0) * w, (EU.lat1 - lat) / (EU.lat1 - EU.lat0) * h]; }
+function euXY(lon, lat, w, h) { return [(lon - GEO.lon0) / (GEO.lon1 - GEO.lon0) * w, (GEO.lat1 - lat) / (GEO.lat1 - GEO.lat0) * h]; }
 function euWorld(x, z, w, h) { return [(x / MAP.x + 1) / 2 * w, (z / MAP.z + 1) / 2 * h]; }
 function euLane(l, idx, w, h) { const q = lanePos(l, idx); return euWorld(q.x, q.z, w, h); }
 function euPoint(p, w, h) { return euWorld(p.x, p.z, w, h); }
@@ -1420,16 +1494,17 @@ function drawEuBg(w, h) {
   euBg = document.createElement('canvas'); euBg.width = w; euBg.height = h; const c = euBg.getContext('2d');
   const g = c.createLinearGradient(0, 0, 0, h); g.addColorStop(0, '#163a52'); g.addColorStop(1, '#1d4a66'); c.fillStyle = g; c.fillRect(0, 0, w, h);
   c.strokeStyle = 'rgba(255,255,255,.05)'; c.lineWidth = 1;                 // graticule
-  for (let lon = -8; lon < 18; lon += 2) { const q = euXY(lon, 0, w, h); c.beginPath(); c.moveTo(q[0], 0); c.lineTo(q[0], h); c.stroke(); }
-  for (let lat = 47; lat < 56; lat++) { const q = euXY(0, lat, w, h); c.beginPath(); c.moveTo(0, q[1]); c.lineTo(w, q[1]); c.stroke(); }
-  const land = () => { for (const poly of EU_LAND) { c.beginPath(); poly.forEach((q, i) => { const r = euXY(q[0], q[1], w, h); c[i ? 'lineTo' : 'moveTo'](r[0], r[1]); }); c.closePath(); c.fill(); c.stroke(); } };
+  const gs = TH.grid;
+  for (let lon = Math.ceil(GEO.lon0 / gs[0]) * gs[0]; lon < GEO.lon1; lon += gs[0]) { const q = euXY(lon, 0, w, h); c.beginPath(); c.moveTo(q[0], 0); c.lineTo(q[0], h); c.stroke(); }
+  for (let lat = Math.ceil(GEO.lat0 / gs[1]) * gs[1]; lat < GEO.lat1; lat += gs[1]) { const q = euXY(0, lat, w, h); c.beginPath(); c.moveTo(0, q[1]); c.lineTo(w, q[1]); c.stroke(); }
+  const land = () => { for (const poly of LAND) { c.beginPath(); poly.forEach((q, i) => { const r = euXY(q[0], q[1], w, h); c[i ? 'lineTo' : 'moveTo'](r[0], r[1]); }); c.closePath(); c.fill(); c.stroke(); } };
   c.lineJoin = 'round'; c.fillStyle = 'rgba(120,170,190,.25)'; c.strokeStyle = 'rgba(120,170,190,.25)'; c.lineWidth = 9; land();   // shallows
   c.fillStyle = '#4b6a3d'; c.strokeStyle = '#c9c08f'; c.lineWidth = 1.5; land();
   const R = rng32(1944);
   for (let i = 0; i < 2600; i++) { c.fillStyle = R() < 0.5 ? 'rgba(0,0,0,.05)' : 'rgba(255,255,220,.04)'; c.fillRect(R() * w, R() * h, 2 + R() * 3, 2 + R() * 3); }
   c.textAlign = 'center';
-  for (const L of EU_LABELS) {
-    const q = euXY(L[1], L[2], w, h), sea = L[3] < 13 && L[0] !== 'IRELAND';
+  for (const L of TH.labels) {
+    const q = euXY(L[1], L[2], w, h), sea = !!L[4];
     c.font = (sea ? 'italic ' : '700 ') + L[3] + 'px "Trebuchet MS",sans-serif'; c.fillStyle = sea ? 'rgba(170,205,225,.6)' : 'rgba(20,30,15,.45)';
     c.fillText(sea ? L[0] : L[0].split('').join(' '), q[0], q[1]);
   }
@@ -1454,8 +1529,8 @@ function drawCamp() {
   const path = [[f2[0] + (f2[0] - f1[0]) * 0.8, f2[1] + (f2[1] - f1[1]) * 0.8], f2, f1, f0, [f0[0] + (f0[0] - f1[0]) * 0.8, f0[1] + (f0[1] - f1[1]) * 0.8]];
   c.beginPath(); path.forEach((q, i) => c[i ? 'lineTo' : 'moveTo'](q[0], q[1]));
   c.strokeStyle = 'rgba(0,0,0,.7)'; c.lineWidth = 6; c.stroke(); c.setLineDash([9, 7]); c.strokeStyle = '#ffd24a'; c.lineWidth = 3; c.stroke(); c.setLineDash([]);
-  if (calaisHeld()) {                      // the invasion route across the strait
-    const a = euPoint(PT(4, 1), w, h), b = euPoint(ENG[ENG.length - 1], w, h);
+  if (invasionOpen()) {                    // the invasion route to the Allied homeland
+    const a = euPoint(PT(INVADE.col, INVADE.lane), w, h), b = euPoint(ENG[ENG.length - 1], w, h);
     c.setLineDash([3, 5]); c.strokeStyle = '#ff8a7a'; c.lineWidth = 2; c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]); c.stroke(); c.setLineDash([]);
   }
   c.textAlign = 'center';
@@ -1465,7 +1540,7 @@ function drawCamp() {
     const q = euWorld(BASE[team].x, BASE[team].z, w, h);
     c.fillStyle = team === ALLY ? '#3f7dff' : '#f04a3c'; c.strokeStyle = '#101010'; c.lineWidth = 1.5; c.fillRect(q[0] - 9, q[1] - 9, 18, 18); c.strokeRect(q[0] - 9, q[1] - 9, 18, 18);
     c.fillStyle = '#fff'; c.fillText('HQ', q[0], q[1] + 4);
-    text(team === ALLY ? 'Allied HQ' : 'Axis HQ · Berlin', q[0], q[1] - 15);
+    text(TH.hqLabels[team], q[0], TH.hqBelow && TH.hqBelow[team] ? q[1] + 22 : q[1] - 15);
   }
   if (state !== 'menu') for (const u of units) {
     if (u === player || u.def.domain === 'bld') continue;
@@ -1497,7 +1572,7 @@ function updateHUD(dt) {
   const s = World.info;
   $('season').textContent = `${s.icon} ${s.name}`; $('seasonDesc').textContent = s.desc;
   $('seasonBar').style.width = (World.remaining / SEASON_LEN * 100) + '%';
-  const wx = $('wx'); wx.className = { Summer: 'heat', Fall: 'fog', Winter: 'snow', 'Rainy Season': 'rain' }[s.name];
+  const wx = $('wx'); wx.className = s.wx || '';
   let workers = 0, residents = 0, gunners = 0, sailors = 0, merch = 0, fac = 0, hou = 0;
   for (const u of units) {
     if (u.team !== ALLY) continue; const d = u.def;
@@ -1546,7 +1621,7 @@ function updateHUD(dt) {
 function setupTeams() {
   setupPoints();
   for (const team of [ALLY, AXIS]) {
-    const b = BASE[team], s = team === ALLY ? 1 : -1;
+    const b = BASE[team], s = FACE[team];
     for (let r = 0; r < 4; r++) for (let c = 0; c < 5; c++) plots[team].push({ x: b.x + (c - 2) * 46 - s * 10, z: b.z + (r - 1.5) * 46, unit: null, rubble: null });
     // interleave so early buildings spread out
     plots[team].sort((p, q) => Math.hypot(p.x - b.x, p.z - b.z) - Math.hypot(q.x - b.x, q.z - b.z));
@@ -1559,7 +1634,7 @@ function setupTeams() {
     // both armies are limited to the tiers the player has unlocked: anything above that is swapped for the basic type
     const basic = team === ALLY ? { air: 'spitfire', land: 'troops', sea: 'ward' } : { air: 'bf109', land: 'grenadier', sea: 'z23' };
     for (const id of ids) spawnAt(Account.has(id) ? id : basic[DEFS[id].domain], team);
-    if (team === ALLY) for (let i = 0; i < 2; i++) spawnAt('troops', ALLY, -1);      // the garrison of England
+    if (team === ALLY) for (let i = 0; i < 2; i++) spawnAt('troops', ALLY, -1);      // the garrison of the homeland
   }
 }
 function update(dt) {
@@ -1688,10 +1763,11 @@ function init() {
     if (canDeployIn(c)) { selCol = c; renderMenu(); }
     else $('sectorInfo').innerHTML = `The <b>${secName(c)}</b> sector is not in Allied hands: you can only deploy where the Allies hold a point.`;
   });
+  $('helpCampaign').innerHTML = TH.help;
   $('resetLink').onclick = () => { if (confirm('Start again from scratch? Every unlock, credit and the campaign map is lost.')) { Account.reset(); location.reload(); } };
   renderMenu();
   requestAnimationFrame(loop);
 }
 // debug / test handle
-window.G = { units, wrecks, projs, World, step(n, dt) { for (let i = 0; i < n; i++) update(dt || 0.033); }, get player() { return player; }, get money() { return money; }, set money(v) { money = v; }, get state() { return state; }, startAs, deploy, buy, toggleShop, toggleMap, switchVehicle, damage, kill, spawnAt, spawn, airlift, sealift, requisition, setPlayer, Account, POINTS, PT, capture, endBattle, reach, stage, frontPos, ferry, ENG, engObjective, calaisHeld, navTo, sdf, get battleT() { return battleT; }, set battleT(v) { battleT = v; }, get selCol() { return selCol; }, set selCol(v) { selCol = v; }, stats, get lastBought() { return lastBought; }, get deployCd() { return deployCd; }, set deployCd(v) { deployCd = v; } };
+window.G = { units, wrecks, projs, World, step(n, dt) { for (let i = 0; i < n; i++) update(dt || 0.033); }, get player() { return player; }, get money() { return money; }, set money(v) { money = v; }, get state() { return state; }, startAs, deploy, buy, toggleShop, toggleMap, switchVehicle, damage, kill, spawnAt, spawn, airlift, sealift, requisition, setPlayer, Account, POINTS, PT, capture, endBattle, reach, stage, frontPos, ferry, ENG, engObjective, calaisHeld, invasionOpen, landZone, islandOf, TH, navTo, sdf, get battleT() { return battleT; }, set battleT(v) { battleT = v; }, get selCol() { return selCol; }, set selCol(v) { selCol = v; }, stats, get lastBought() { return lastBought; }, get deployCd() { return deployCd; }, set deployCd(v) { deployCd = v; } };
 init();
