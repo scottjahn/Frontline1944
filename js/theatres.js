@@ -189,6 +189,8 @@ const MOD_ISLANDS = [
   { name: 'Qingdao', lanes: [[119.7, 36.4], [120.2, 36.15], [121.4, 35.2]], pts: ['Laoshan', 'Qingdao Beach', 'Yellow Sea'] },
   { name: 'Tianjin', lanes: [[117.0, 39.35], [117.55, 39.15], [119.0, 38.75]], pts: ['Tianjin Airport', 'Tianjin Port', 'Bohai Sea'] }
 ];
+// radar-guided air-to-air missile for the Modern Era fighters (replaces their bombs)
+const AAM = dmg => ({ kind: 'aam', dmg, splash: 12, cd: 5, vel: 270, range: 1500, turn: 2.4, label: 'Missiles' });
 const MOD_HOME_LANES = [[[147.6, 15.9], [147.4, 14.7], [150.8, 13.2]], [[116.0, 39.7], [116.9, 39.75], [119.9, 39.2]]];
 const MOD_GUAM = islandBlob([146.0, 15.0], 4.4, 2.3, 0.05, 61);
 const MOD_THEATRE = {
@@ -254,11 +256,11 @@ const MOD_THEATRE = {
   },
   // modern shapes and performance, per unit (both sides listed)
   looks: {
-    spitfire: { model: 'jet', speed: 145 }, mustang: { model: 'jet', twinTail: 1, speed: 160 }, p38: { model: 'jet', stealth: 1, big: 1.1, speed: 170 },
+    spitfire: { model: 'jet', speed: 145, alt: AAM(85) }, mustang: { model: 'jet', twinTail: 1, speed: 160, alt: AAM(110) }, p38: { model: 'jet', stealth: 1, big: 1.1, speed: 170, alt: AAM(140) },
     avenger: { model: 'jetliner', engines: 2, big: 0.75, speed: 125 }, r4: { model: 'attackheli', speed: 68 },
     b25: { model: 'a10', big: 1, speed: 115 }, b17: { model: 'jetbomber', engines: 4, speed: 135 }, b24: { model: 'flywing', speed: 140 },
     c54: { model: 'jetliner', highWing: 1, engines: 4, big: 1.05, speed: 120 },
-    bf109: { model: 'jet', canard: 1, speed: 145 }, fw190: { model: 'jet', twinTail: 1, speed: 160 }, bf110: { model: 'jet', stealth: 1, canard: 1, big: 1.15, speed: 170 },
+    bf109: { model: 'jet', canard: 1, speed: 145, alt: AAM(85) }, fw190: { model: 'jet', twinTail: 1, speed: 160, alt: AAM(110) }, bf110: { model: 'jet', stealth: 1, canard: 1, big: 1.15, speed: 170, alt: AAM(140) },
     fi167: { model: 'bomber', engines: 2, big: 0.6, cargoLook: 1 }, fa223: { model: 'attackheli', speed: 68 },
     ju88: { model: 'jet', big: 1.2, speed: 125 }, he111: { model: 'jetbomber', engines: 2, speed: 125 }, me264: { model: 'flywing', speed: 140 },
     me323: { model: 'jetliner', highWing: 1, engines: 4, big: 1.05, speed: 120 },
@@ -278,7 +280,7 @@ const MOD_THEATRE = {
   descs: {
     troops: 'Eight soldiers with a Javelin missile launcher.', jeep: 'Fast armored scout car with a .50 cal.', halftrack: 'Anti-aircraft vehicle. Shreds aircraft and drones.',
     sherman: 'Infantry fighting vehicle. Rapid-fire cannon.', priest: 'Self-propelled howitzer. Huge range and blast, slow to reload.', pershing: 'Main battle tank. 120mm cannon.',
-    spitfire: 'Agile jet fighter. Cannon + one bomb.', mustang: 'Faster, tougher carrier jet. Two bombs.', p38: 'Stealth fighter. Hard-hitting cannon, three bombs.',
+    spitfire: 'Agile jet fighter. Cannon + homing air-to-air missiles.', mustang: 'Faster, tougher carrier jet. Cannon + stronger missiles.', p38: 'Stealth fighter. Hard-hitting cannon, deadliest missiles.',
     avenger: 'Sub-hunting patrol plane. Drops torpedoes on ships.', r4: 'Attack helicopter. Hovers, strafes, fires Hellfire rockets.',
     b25: 'Ground-attack jet. Four bombs, fast turnaround.', b17: 'Supersonic heavy bomber with defensive guns.', b24: 'Stealth bomber carrying a nuclear bomb. One drop obliterates everything beneath it.',
     c47: 'Cargo plane. Flies supply runs and pays cash on every return.', c54: 'Jet transport. Parachutes ground reinforcements in.',

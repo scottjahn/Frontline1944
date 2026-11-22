@@ -437,15 +437,71 @@ function moveSea(u, dt) {
 // -------------------------------------------------------------- weapons
 const PGEO = {
   bullet: new THREE.BoxGeometry(0.18, 0.18, 3.2), shell: new THREE.SphereGeometry(0.6, 6, 5),
-  bomb: new THREE.CylinderGeometry(0.45, 0.3, 2.2, 6).rotateX(Math.PI / 2), nuke: new THREE.CylinderGeometry(1.5, 0.9, 6, 8).rotateX(Math.PI / 2), torpedo: new THREE.CylinderGeometry(0.45, 0.45, 5, 6).rotateX(Math.PI / 2)
+  bomb: new THREE.CylinderGeometry(0.45, 0.3, 2.2, 6).rotateX(Math.PI / 2), nuke: new THREE.CylinderGeometry(1.5, 0.9, 6, 8).rotateX(Math.PI / 2), torpedo: new THREE.CylinderGeometry(0.45, 0.45, 5, 6).rotateX(Math.PI / 2),
+  aam: new THREE.CylinderGeometry(0.24, 0.24, 3.6, 6).rotateX(Math.PI / 2)
 };
 const PMAT = {
   bullet: new THREE.MeshBasicMaterial({ color: 0xffe27a }), shell: new THREE.MeshBasicMaterial({ color: 0xff9a3a }),
-  bomb: new THREE.MeshLambertMaterial({ color: 0x2a2d28 }), nuke: new THREE.MeshLambertMaterial({ color: 0xd8c23a }), torpedo: new THREE.MeshLambertMaterial({ color: 0x30343a })
+  bomb: new THREE.MeshLambertMaterial({ color: 0x2a2d28 }), nuke: new THREE.MeshLambertMaterial({ color: 0xd8c23a }), torpedo: new THREE.MeshLambertMaterial({ color: 0x30343a }),
+  aam: new THREE.MeshBasicMaterial({ color: 0xf4f4ee })
 };
 function addProj(kind, o, vel, owner, dmg, splash, life) {
   const m = new THREE.Mesh(PGEO[kind], PMAT[kind]); m.position.copy(o); scene.add(m);
-  projs.push({ kind, pos: o.clone(), prev: o.clone(), vel, team: owner.team, owner, pl: owner === player, dmg, splash, life, mesh: m, wake: 0, swim: false });
+  const p = { kind, pos: o.clone(), prev: o.clone(), vel, team: owner.team, owner, pl: owner === player, dmg, splash, life, mesh: m, wake: 0, swim: false };
+  projs.push(p); return p;
+}
+// ---- homing air-to-air missiles (Modern Era fighters)
+// the enemy aircraft closest to a direction, within a cone of maxAng radians and the missile's range
+function airLock(team, from, dir, maxAng, range) {
+  let best = null, ba = maxAng;
+  for (const e of units) {
+    if (e.team === team || e.dead || e.def.domain !== 'air') continue;
+    centerOf(e, TC).sub(from); const dist = TC.length(); if (dist > range * World.vis || dist < 20) continue;
+    const ang = Math.acos(clamp(TC.dot(dir) / dist, -1, 1)); if (ang < ba) { ba = ang; best = e; }
+  }
+  return best;
+}
+function playerLock() {
+  const a = player && player.def.alt; if (!a || a.kind !== 'aam') return null;
+  if (zoomTarget && zoomTarget.def.domain === 'air' && !zoomTarget.dead) return zoomTarget;
+  return airLock(ALLY, camera.position, aimDir, 0.3, a.range);
+}
+let missileWarnT = -99;
+function fireMissile(u, aim) {
+  const a = u.def.alt, dir = fwd(u.yaw, u.pitch, V());
+  const tgt = u === player ? playerLock() : (u.target && u.target.def.domain === 'air' ? u.target : null);
+  const o = T2.copy(u.pos).addScaledVector(dir, u.def.radius * 0.6); o.y -= 1.2;
+  if (!tgt) dir.subVectors(aim, o).normalize().lerp(fwd(u.yaw, u.pitch, T3), 0.5).normalize();   // no lock: fly where the pilot aims
+  const p = addProj('aam', o, dir.multiplyScalar(Math.max(u.speed, 60) + 40), u, a.dmg, a.splash, a.range / a.vel * 1.5);
+  p.tgt = tgt; p.vmax = a.vel; p.turn = a.turn;
+  if (u !== player) u.cdAlt *= 1.8;
+  sfx('shell', u.pos);
+  if (tgt === player && time - missileWarnT > 3) { missileWarnT = time; msg('MISSILE INBOUND! Turn hard to shake it off!', 'bad'); }
+  else if (u === player) msg(tgt ? `Fox two! Missile away at the ${tgt.def.name}` : 'Missile away, no lock', tgt ? 'good' : '');
+}
+function steerMissile(p, dt) {
+  let sp = p.vel.length(); sp = Math.min(p.vmax, sp + 320 * dt);
+  const dir = T3.copy(p.vel).normalize();
+  if (p.tgt && (p.tgt.dead || p.tgt.team === p.team)) p.tgt = null;
+  if (p.tgt) {
+    const dist = p.pos.distanceTo(p.tgt.pos), t = p.tgt;
+    // a jet turning hard with a missile close behind pops flares, and they often fool the seeker
+    TA.copy(t.vel).normalize(); const turnRate = p.lastV ? Math.acos(clamp(TA.dot(p.lastV), -1, 1)) / dt : 0;
+    if (!p.lastV) p.lastV = V(); p.lastV.copy(TA);
+    if (dist < 320 && turnRate > 0.7 && Math.random() < 1.3 * dt) {
+      for (let i = 0; i < 6; i++) { TA.copy(t.pos).add(T2.set(rnd(-4, 4), rnd(-3, 1), rnd(-4, 4))); fx(TA, i % 2 ? 0xfff4c8 : 0xffa040, 1.6, 0.4, 1.3, -10, 1); }
+      if (t === player) msg('Flares! The missile is fooled.', 'good');
+      // the missile chases the flares, falling behind and below the jet, and can no longer hit it
+      TA.copy(t.pos).addScaledVector(t.vel, -0.8); TA.y -= 25; dir.copy(TA.sub(p.pos).normalize());
+      p.tgt = null; p.ignore = t; p.vel.copy(dir).multiplyScalar(sp); return;
+    }
+    centerOf(p.tgt, TA).addScaledVector(p.tgt.vel, Math.min(2, dist / sp) * 0.8).sub(p.pos).normalize();
+    const ang = Math.acos(clamp(dir.dot(TA), -1, 1)), k = Math.min(1, p.turn * dt / Math.max(ang, 1e-4));
+    if (ang > 1.6) p.tgt = null;                 // overshot: the seeker loses the target
+    else dir.lerp(TA, k).normalize();
+  }
+  p.vel.copy(dir).multiplyScalar(sp);
+  p.wake -= dt; if (p.wake <= 0) { p.wake = 0.05; fx(p.pos, 0xe6e6e0, 0.7, 3.2, 0.8, 1, 0.5); }
 }
 function shoot(u, w, aim, xs) {
   const d = u.def, o = T2;
@@ -471,6 +527,7 @@ function fireAlt(u, aim) {
   const a = u.def.alt; if (!a || u.cdAlt > 0) return false;
   u.cdAlt = a.cd * World.reload;
   if (a.kind === 'launch') { if (!launchWing(u)) u.cdAlt = 4; return true; }
+  if (a.kind === 'aam') { fireMissile(u, aim); return true; }
   if (a.kind === 'bomb' || a.kind === 'nuke') { u.bombQ = a.count; u.bombT = 0; }
   else if (a.kind === 'torpedo') {
     let yaw, ox, oz, oy;
@@ -504,6 +561,7 @@ function hitTest(u, p) {
 function updateProjs(dt) {
   for (let i = projs.length - 1; i >= 0; i--) {
     const p = projs[i]; p.prev.copy(p.pos); p.life -= dt;
+    if (p.kind === 'aam') steerMissile(p, dt);
     if (p.kind === 'bomb' || p.kind === 'nuke' || (p.kind === 'torpedo' && !p.swim)) p.vel.y -= 40 * dt;
     p.pos.addScaledVector(p.vel, dt);
     const th = terrainH(p.pos.x, p.pos.z);
@@ -515,8 +573,9 @@ function updateProjs(dt) {
         p.wake -= dt; if (p.wake <= 0) { p.wake = 0.12; TC.copy(p.pos).setY(World.water + 0.1); fx(TC, 0xffffff, 0.8, 2.4, 1.6, 0, 0.5); }
       }
     } else if (p.pos.y <= Math.max(th, World.water)) { done = true; p.pos.y = Math.max(th, World.water); }
-    if (!done) for (const u of units) {
-      if (u.team === p.team || u.dead) continue;
+    if (!done && p.tgt && distToUnit(p.tgt, p.pos) < 5) hit = p.tgt;              // proximity fuse
+    if (!done && !hit) for (const u of units) {
+      if (u.team === p.team || u.dead || u === p.ignore) continue;
       if (p.kind === 'torpedo' && (u.def.domain !== 'sea' || !p.swim)) continue;
       if (u.def.sub && u.dive > 0.5 && p.kind !== 'torpedo') continue;   // submerged: only torpedoes and blast reach it
       if (hitTest(u, p)) { hit = u; break; }
@@ -762,6 +821,7 @@ function aiAir(u, dt) {
       T2.subVectors(g, u.pos).normalize(); fwd(u.yaw, u.pitch, TA);
       const dot = T2.dot(TA);
       if (dist < d.gun.range && dot > 0.995) fireGun(u, g, 0.02);
+      if (air && d.alt && d.alt.kind === 'aam' && u.cdAlt <= 0 && dist > 140 && dist < d.alt.range * 0.7 && dot > 0.9) fireAlt(u, t.pos);
       if (dist < (air ? 50 : 150) || (!air && dist < 260 && dot < 0.4)) setBreak(u, air ? 1.6 : 4.5, 550, gr + 150, true);
     }
   }
@@ -1410,6 +1470,20 @@ function drawOverlay() {
     const label = p.name + ' · ' + (dist * 3 > 5000 ? (dist * 3 / 5280).toFixed(1) + ' mi' : Math.round(dist * 3 / 10) * 10 + ' ft');
     c.lineWidth = 3; c.strokeText(label, sx, sy + 17); c.fillStyle = '#f4f1e2'; c.fillText(label, sx, sy + 17);
     if (p.prog) { const bw = 46; c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(sx - bw / 2, sy + 22, bw, 5); c.fillStyle = p.prog > 0 ? '#5b93ff' : '#ff5a4d'; c.fillRect(sx - bw / 2, sy + 22, bw * Math.min(1, Math.abs(p.prog)), 5); }
+  }
+  const lk = state === 'playing' ? playerLock() : null;
+  if (lk) {                                 // missile seeker lock box
+    T1.copy(lk.pos); T1.y += lk.def.centerY || 0; T1.project(camera);
+    if (T1.z < 1) {
+      const sx = (T1.x + 1) / 2 * w, sy = (1 - T1.y) / 2 * h, ready = player.cdAlt <= 0, b = 16;
+      c.strokeStyle = ready ? '#ff3b30' : 'rgba(255,255,255,.6)'; c.lineWidth = 2; c.strokeRect(sx - b, sy - b, b * 2, b * 2);
+      c.fillStyle = c.strokeStyle; c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.6)';
+      const t = ready ? 'LOCK' : 'RELOADING'; c.strokeText(t, sx, sy - b - 5); c.fillText(t, sx, sy - b - 5);
+    }
+  }
+  if (player && projs.some(p => p.kind === 'aam' && p.tgt === player) && time % 0.5 < 0.32) {
+    c.font = '800 20px "Trebuchet MS",sans-serif'; c.lineWidth = 4; c.strokeStyle = 'rgba(0,0,0,.7)'; c.fillStyle = '#ff3b30';
+    c.strokeText('MISSILE INBOUND · TURN HARD', w / 2, h * 0.3); c.fillText('MISSILE INBOUND · TURN HARD', w / 2, h * 0.3);
   }
   if (state === 'playing') {
     const cx = w / 2, cy = h / 2, r = input.zoom ? 26 : 14;
