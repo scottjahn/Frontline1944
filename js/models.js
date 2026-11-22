@@ -254,10 +254,10 @@ function mHalftrack(team) {
   g.add(t); g.userData.turrets = [t];
   g.userData.teamMat = tm; return g;
 }
-function mSquad(team) {
+function mSquad(team, d) {
   const g = new THREE.Group(), tm = teamMat(team);
-  const uni = mat(team === ALLY ? 0x5a6a3c : 0x6a6d60), legs = mat(0x3b3b30), dark = mat(0x1f1f1f);
-  const helm = mat(team === ALLY ? 0x3f4a2a : 0x3c4046);
+  const uni = mat(d.uni || (team === ALLY ? 0x5a6a3c : 0x6a6d60)), legs = mat(d.legs || 0x3b3b30), dark = mat(0x1f1f1f);
+  const helm = mat(d.helm || (team === ALLY ? 0x3f4a2a : 0x3c4046));
   const soldiers = [];
   for (let i = 0; i < 8; i++) {
     const s = new THREE.Group();
@@ -286,6 +286,7 @@ function hullGeo(len, beam, h) {
   geo.rotateX(-Math.PI / 2); return geo;
 }
 function mShip(team, d) {
+  if (d.modern) return mModernShip(team, d);
   const g = new THREE.Group(), tm = teamMat(team);
   const len = d.len, beam = d.beam, h = beam * 0.6, deck = h * 0.55;
   const hullM = shipSkin(team), sup = supSkin(team), dark = mat(0x2b2f33);
@@ -445,6 +446,7 @@ function mJeep(team) {
   g.userData.teamMat = tm; return g;
 }
 function mSub(team, d) {
+  if (d.modern) return mModernSub(team, d);
   const g = new THREE.Group(), tm = teamMat(team), len = d.len, r = d.beam / 2;
   const hull = skin('hull', team === ALLY ? 0x4a545c : 0x3a4046, 0x4a3a2c, 3, 12), dark = mat(0x23272b);
   cyl(g, r, r, len * 0.6, hull, 0, -r * 0.3, 0);
@@ -497,8 +499,8 @@ function flightDeck(team) {
 }
 function mCarrier(team, d) {
   const g = new THREE.Group(), tm = teamMat(team);
-  const len = d.len, beam = d.beam, deckY = 6.6, ix = beam * 0.5, iz = len * 0.06;
-  const hullM = shipSkin(team), sup = supSkin(team), dark = mat(0x2b2f33), edge = mat(team === ALLY ? 0x4a535d : 0x3c3f42);
+  const len = d.len, beam = d.beam, deckY = 6.6, ix = beam * 0.5, iz = d.modern ? -len * 0.16 : len * 0.06;
+  const hullM = d.modern ? skin('hull', team === ALLY ? 0x8a939b : 0x7d8790, 0x5a5048, 0, 16) : shipSkin(team), sup = supSkin(team), dark = mat(0x2b2f33), edge = mat(team === ALLY ? 0x4a535d : 0x3c3f42);
   part(g, hullGeo(len, beam * 0.86, 9), [edge, hullM], 0, -3.6, 0);
   bx(g, beam * 0.84, 1.3, len * 0.86, sup, 0, 5.5, 0);                // hangar deck under the overhang
   const fd = new THREE.Mesh(new THREE.BoxGeometry(beam * 1.22, 0.7, len * 0.98), [edge, edge, flightDeck(team), edge, edge, edge]);
@@ -507,7 +509,8 @@ function mCarrier(team, d) {
   bx(g, 3.0, 3, 12, sup, ix, deckY + 7.5, iz + 2);
   bx(g, 3.1, 0.9, 12.1, GLASS, ix, deckY + 8.2, iz + 2);
   bx(g, 3.45, 0.7, 24.1, tm, ix, deckY + 5.6, iz);
-  cyl(g, 1.3, 1.6, 6, dark, ix, deckY + 9, iz - 7, 'y');
+  if (!d.modern) cyl(g, 1.3, 1.6, 6, dark, ix, deckY + 9, iz - 7, 'y');
+  else { const a = bx(g, beam * 0.5, 0.72, len * 0.42, flightDeck(team), -beam * 0.3, deckY - 0.33, -len * 0.12); a.rotation.y = 0.16; }   // angled landing deck
   cyl(g, 0.2, 0.25, 12, dark, ix, deckY + 15, iz + 4, 'y');
   bx(g, 5, 0.2, 0.2, dark, ix, deckY + 19, iz + 4); bx(g, 3.4, 1.7, 0.2, dark, ix, deckY + 21.4, iz + 4);
   const turrets = [];
@@ -519,7 +522,7 @@ function mCarrier(team, d) {
   }
   for (let i = 0; i < 5; i++) { bx(g, 1.8, 1.2, 2.6, dark, -beam * 0.63, deckY - 0.5, -len * 0.36 + i * len * 0.18); cyl(g, 0.08, 0.08, 2.4, dark, -beam * 0.63, deckY + 0.9, -len * 0.36 + i * len * 0.18 + 0.8); }
   for (let i = 0; i < 3; i++) {                                       // aircraft spotted aft
-    const p = mFighter(team, {}); p.scale.setScalar(0.8); p.position.set(-3.5 + (i % 2) * 6.5, deckY + 1.1, -len * 0.26 - i * 8); p.rotation.y = i % 2 ? -0.3 : 0.3;
+    const p = d.modern ? mJet(team, { twinTail: 1 }) : mFighter(team, {}); p.scale.setScalar(d.modern ? 0.7 : 0.8); p.position.set(-3.5 + (i % 2) * 6.5, deckY + 1.1, -len * 0.26 - i * 8); p.rotation.y = i % 2 ? -0.3 : 0.3;
     p.traverse(o => { if (o.material === PROP) o.visible = false; }); g.add(p);
   }
   for (let i = 0; i < 7; i++) {
@@ -570,12 +573,305 @@ function mSeaFort(team) {
   bx(g, 3, 1, 12, steel, 9.5, 6, 0); bx(g, 0.4, 9, 0.4, dark, 10.5, 2, 5);   // boat landing
   g.userData.teamMat = tm; return g;
 }
+// ---------- modern era: jets, a flying wing, attack helicopters, modern armour ----------
+const GLOW = new THREE.MeshBasicMaterial({ color: 0xffa040 });
+const MISSILE = mat(0xe4e4dc);
+// grey jet paint: light grey for the US, a bluer grey for China; stealth jets are darker
+function jetSkin(team, d, tile) {
+  if (d.stealth) return skin('metal', team === ALLY ? 0x5d646b : 0x56606a, 0, 0, tile || 8);
+  return team === ALLY ? skin('metal', 0x8e979f, 0, 0, tile || 8) : skin('splinter', 0x8b98a3, 0x76848f, 0x9aa6b0, tile || 8);
+}
+// a flat flying surface from its planform: pts are [x, z] pairs (z forward), extruded to thickness th
+function planform(pts, th, m, tile) {
+  const s = new THREE.Shape(); pts.forEach((p, i) => s[i ? 'lineTo' : 'moveTo'](p[0], -p[1]));
+  const geo = new THREE.ExtrudeGeometry(s, { depth: th, bevelEnabled: false });
+  const uv = geo.attributes.uv, T = tile || 8; for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / T, uv.getY(i) / T);
+  geo.rotateX(-Math.PI / 2); geo.translate(0, -th / 2, 0);
+  return new THREE.Mesh(geo, m);
+}
+function surf(g, pts, th, m, x, y, z, tile) { const me = planform(pts, th, m, tile); me.position.set(x || 0, y || 0, z || 0); g.add(me); return me; }
+// both halves of a wing or tailplane: root leading/trailing edge z, tip x, tip leading/trailing edge z
+function wings(g, root, rl, rt, tip, tl, tt, th, m, y, z) {
+  for (const s of [1, -1]) surf(g, [[s * root, rl], [s * tip, tl], [s * tip, tt], [s * root, rt]], th, m, 0, y, z);
+}
+// a fin standing up from the body: base leading/trailing z, height, top leading/trailing z; cant tilts it outward
+function fin(g, bl, bt, h, tl, tt, m, x, y, cant) {
+  const f = planform([[0, bl], [h, tl], [h, tt], [0, bt]], 0.16, m); f.rotation.z = Math.PI / 2 - (cant || 0); f.position.set(x || 0, y || 0, 0); g.add(f); return f;
+}
+function jetPod(g, r, len, m, x, y, z) {
+  cyl(g, r, r * 1.1, len, m, x, y, z); cyl(g, r * 0.75, r * 0.75, 0.2, GLOW, x, y, z - len / 2 - 0.05);
+  cyl(g, r * 0.8, r * 0.8, 0.2, mat(0x1c1e20), x, y, z + len / 2 + 0.02);
+}
+// fighter jet. d.twinTail: two canted fins; d.canard: foreplanes, no tailplane; d.stealth: dark, angular, missiles inside
+function mJet(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team), body = jetSkin(team, d), dark = mat(0x26282b);
+  cyl(g, 0.8, 0.95, 9, body, 0, 0, 0);
+  cyl(g, 0.05, 0.8, 3.8, body, 0, 0, 6.4);
+  cyl(g, 0.95, 0.85, 2.6, body, 0, 0, -5.8);
+  const can = part(g, new THREE.SphereGeometry(0.62, 10, 6), GLASS, 0, 0.72, 3.4); can.scale.set(0.95, 0.85, 2.4);
+  for (const s of [1, -1]) bx(g, 0.8, 1.0, 3.4, body, s * 1.15, -0.15, 1.2);      // intakes
+  const twin = d.twinTail || d.stealth;
+  if (twin) for (const s of [1, -1]) { cyl(g, 0.55, 0.55, 0.3, dark, s * 0.5, 0, -7.2); cyl(g, 0.45, 0.45, 0.2, GLOW, s * 0.5, 0, -7.35); }
+  else { cyl(g, 0.7, 0.7, 0.4, dark, 0, 0, -7.25); cyl(g, 0.55, 0.55, 0.2, GLOW, 0, 0, -7.45); }
+  if (d.canard || d.stealth && team === AXIS) {
+    wings(g, 0.8, 2.6, -4.2, 5.4, -3.2, -4.6, 0.22, body, -0.1, 0);                 // big delta
+    wings(g, 0.9, 4.6, 3.4, 2.6, 3.6, 3.0, 0.14, body, 0.25, 0);                    // canards
+  } else {
+    wings(g, 0.8, 1.6, -3.0, 5.0, -2.2, -3.4, 0.2, body, -0.1, 0);
+    wings(g, 0.8, -4.8, -6.8, 3.0, -6.2, -7.1, 0.14, body, 0, 0);                   // tailplanes
+  }
+  // long leading-edge root extensions blend the wing into the nose
+  wings(g, 0.75, 4.2, 1.6, 1.4, 1.6, 1.2, 0.18, body, -0.05, 0);
+  if (twin) for (const s of [1, -1]) { const f = fin(g, -3.8, -6.6, 2.6, -5.6, -7.0, body, s * 0.9, 0.5, s * 0.38); }
+  else fin(g, -3.6, -6.9, 3.0, -5.9, -7.1, body, 0, 0.6, 0);
+  // team colour: wingtips and fin tips
+  for (const s of [1, -1]) bx(g, 0.5, 0.24, 1.3, tm, s * 5.0, -0.1, -2.6);
+  if (!d.stealth) for (const s of [1, -1]) for (const x of [2.6, 3.8]) cyl(g, 0.13, 0.13, 2.6, MISSILE, s * x, -0.5, -1.2);
+  if (!d.stealth && d.role === 'bomber') for (const s of [1, -1]) cyl(g, 0.32, 0.32, 2.8, dark, s * 1.6, -0.75, -0.6);
+  for (const s of [1, -1]) decal(g, team, 1.4, s * 3.4, 0.12, -1.8, 'up');
+  decal(g, team, 1.0, 0.86, 0.05, -3.2, 'right'); decal(g, team, 1.0, -0.86, 0.05, -3.2, 'left');
+  if (d.big) g.scale.setScalar(d.big);
+  g.userData.teamMat = tm; return g;
+}
+// stealth flying wing (B-2 / H-20)
+function mFlyingWing(team) {
+  const g = new THREE.Group(), tm = teamMat(team), body = skin('metal', team === ALLY ? 0x3f454b : 0x4a535b, 0, 0, 14), dark = mat(0x1d1f22);
+  surf(g, [[0, 10], [18, -4], [17, -6.5], [11.5, -3.6], [6, -7.2], [0, -4], [-6, -7.2], [-11.5, -3.6], [-17, -6.5], [-18, -4]], 1.1, body, 0, 0, 0, 14);
+  const hump = part(g, new THREE.SphereGeometry(2.6, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), body, 0, 0.4, 2); hump.scale.set(1.5, 0.6, 3);
+  for (const s of [1, -1]) { const k = part(g, new THREE.SphereGeometry(1.1, 8, 5, 0, Math.PI * 2, 0, Math.PI / 2), body, s * 3.6, 0.4, 0.5); k.scale.set(1, 0.6, 3.2); }
+  bx(g, 2.4, 0.45, 1.2, mat(0x2b3a48), 0, 1.75, 6.6);
+  for (const s of [1, -1]) bx(g, 2.2, 0.12, 0.7, dark, s * 3.6, 0.6, -3.6);
+  for (const s of [1, -1]) bx(g, 2.2, 1.14, 1.3, tm, s * 17.2, 0, -5.1);
+  for (const s of [1, -1]) decal(g, team, 2.6, s * 10, 0.6, -2.6, 'up');
+  g.scale.setScalar(1.05);
+  g.userData.teamMat = tm; return g;
+}
+// swept-wing heavy jet bomber (B-1B / H-6K)
+function mJetBomber(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team), body = jetSkin(team, { stealth: d.stealth }, 13), dark = mat(0x26282b);
+  cyl(g, 1.5, 1.7, 22, body, 0, 0, 0);
+  cyl(g, 0.1, 1.5, 7, body, 0, 0.1, 14.5);
+  cyl(g, 1.7, 0.6, 8, body, 0, 0.2, -15);
+  bx(g, 2.2, 0.6, 2.4, GLASS, 0, 1.2, 11.5);
+  wings(g, 1.4, 5, -1.5, 15, -6, -8.2, 0.4, body, 0.6, 0);
+  wings(g, 0.4, -13.5, -18, 7, -17.5, -19.4, 0.3, body, 1.8, 0);
+  fin(g, -11, -18.5, 6, -16.5, -19.6, body, 0, 1.2, 0);
+  bx(g, 0.2, 1.6, 2.6, tm, 0, 6.6, -17.6);
+  for (const s of [1, -1]) bx(g, 1.2, 0.42, 2.4, tm, s * 14.6, 0.6, -7.2);
+  const pods = d.engines === 2 ? [3.2] : [2.6, 4.6];
+  for (const s of [1, -1]) for (const x of pods) jetPod(g, 0.75, 5, dark, s * x, -0.9, -4.5);
+  for (const s of [1, -1]) decal(g, team, 3, s * 8, 1.05, -3.5, 'up');
+  decal(g, team, 2, 1.62, 0, -6, 'right'); decal(g, team, 2, -1.62, 0, -6, 'left');
+  if (d.big) g.scale.setScalar(d.big);
+  g.userData.teamMat = tm; return g;
+}
+// A-10 Warthog: straight wing, engines high on the tail, twin fins, big gun in the nose
+function mA10(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team), body = skin('metal', team === ALLY ? 0x6c747a : 0x7f8b94, 0, 0, 10), dark = mat(0x26282b);
+  cyl(g, 1.0, 1.1, 11, body, 0, 0, 0.5);
+  cyl(g, 0.5, 1.0, 2.6, body, 0, -0.1, 7.3);
+  cyl(g, 0.12, 0.12, 1.6, dark, 0, -0.35, 9.2);
+  cyl(g, 1.1, 0.4, 5, body, 0, 0.1, -7.4);
+  const can = part(g, new THREE.SphereGeometry(0.7, 10, 6), GLASS, 0, 0.95, 4.6); can.scale.set(1, 0.9, 1.5);
+  wings(g, 0.9, 2.4, -0.6, 9.5, 1.6, -0.2, 0.3, body, -0.4, 0);
+  for (const s of [1, -1]) { jetPod(g, 0.95, 3.6, body, s * 1.9, 1.35, -4.2); bx(g, 0.4, 0.9, 1.4, body, s * 1.4, 0.75, -4.2); }
+  wings(g, 0.3, -7.2, -9.4, 3.6, -8.4, -9.4, 0.2, body, 0.3, 0);
+  for (const s of [1, -1]) { fin(g, -7.8, -9.6, 3.2, -8.6, -9.8, body, s * 3.6, -0.8, 0); bx(g, 0.24, 0.8, 1.4, tm, s * 3.6, 2.05, -9.2); }
+  for (const s of [1, -1]) for (const x of [3.2, 5.4, 7.4]) cyl(g, 0.28, 0.28, 2.4, x > 5 ? MISSILE : dark, s * x, -0.85, 0.6);
+  for (const s of [1, -1]) decal(g, team, 1.6, s * 6, -0.2, 0.6, 'up');
+  decal(g, team, 1.2, 1.1, 0, -2.6, 'right'); decal(g, team, 1.2, -1.1, 0, -2.6, 'left');
+  if (d.big) g.scale.setScalar(d.big);
+  g.userData.teamMat = tm; return g;
+}
+// big jet: C-17 / Y-20 transport (high wing, T-tail, four engines) or P-8 patrol plane (low wing, two engines)
+function mJetliner(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team), body = skin('metal', team === ALLY ? 0x7b848c : 0x87929b, 0, 0, 13), dark = mat(0x26282b);
+  const r = d.highWing ? 2.1 : 1.5, L = d.highWing ? 22 : 20;
+  cyl(g, r, r, L, body, 0, 0, 0);
+  const n = part(g, new THREE.SphereGeometry(r, 10, 7), body, 0, 0, L / 2); n.scale.z = 1.6;
+  cyl(g, r, 0.5, 8, body, 0, d.highWing ? 0.6 : 0.3, -L / 2 - 4);
+  bx(g, r * 1.1, 0.5, 1, GLASS, 0, r * 0.55, L / 2 + 1.6);
+  const wy = d.highWing ? r * 0.9 : -r * 0.6;
+  wings(g, r * 0.8, 4, -2, 15, -3.6, -5.6, 0.4, body, wy, 0);
+  for (const s of [1, -1]) bx(g, 1.2, 0.42, 2, tm, s * 14.6, wy, -4.6);
+  for (const s of [1, -1]) for (const x of d.engines === 4 ? [5, 9.5] : [5.5]) {
+    jetPod(g, 0.85, 4, dark, s * x, wy - 1.3, 1.4 - x * 0.35); bx(g, 0.3, 0.9, 2, dark, s * x, wy - 0.6, 0.8 - x * 0.35);
+  }
+  const fh = d.highWing ? 6 : 5;
+  fin(g, -L / 2 - 1.5, -L / 2 - 7.6, fh, -L / 2 - 6, -L / 2 - 8.4, body, 0, 0.8, 0);
+  if (d.highWing) wings(g, 0.1, -L / 2 - 5.4, -L / 2 - 8.2, 6, -L / 2 - 7.4, -L / 2 - 8.6, 0.3, body, 0.8 + fh, 0);
+  else wings(g, 0.4, -L / 2 - 3.8, -L / 2 - 7.2, 6, -L / 2 - 6.6, -L / 2 - 7.8, 0.3, body, 0.5, 0);
+  bx(g, 0.22, 1.6, 2.6, tm, 0, 0.8 + fh - 0.6, -L / 2 - 6.9);
+  for (const s of [1, -1]) decal(g, team, 3, s * 9, wy + 0.25, -2.5, 'up');
+  decal(g, team, 2, r + 0.02, 0, -5, 'right'); decal(g, team, 2, -r - 0.02, 0, -5, 'left');
+  if (d.big) g.scale.setScalar(d.big);
+  g.userData.teamMat = tm; return g;
+}
+// attack helicopter (Apache / Z-10): slim body, two-seat stepped canopy, stub wings with rocket pods, four blades
+function mAttackHeli(team) {
+  const g = new THREE.Group(), tm = teamMat(team), body = team === ALLY ? skin('camo', 0x4a5040, 0x3e4436, 0x555c48, 6) : skin('splinter', 0x7d8a8e, 0x66747a, 0x8f9a9e, 6), dark = mat(0x222426);
+  bx(g, 1.5, 1.8, 5.2, body, 0, 0, 0);
+  cyl(g, 0.4, 0.75, 2.2, body, 0, -0.2, 3.6);
+  bx(g, 1.3, 0.8, 1.6, GLASS, 0, 0.7, 2.4); bx(g, 1.3, 0.8, 1.6, GLASS, 0, 1.15, 0.9);
+  for (const s of [1, -1]) cyl(g, 0.55, 0.55, 2.2, body, s * 1.05, 0.8, -0.6);
+  cyl(g, 0.55, 0.3, 7.4, body, 0, 0.3, -6.2);
+  fin(g, -9.0, -10.4, 2.4, -9.8, -10.8, body, 0, 0.3, 0);
+  wings(g, 0.1, -9.2, -10.2, 1.6, -9.4, -10.2, 0.12, body, 0, 0);
+  cyl(g, 1.1, 1.1, 0.05, PROP, 0.3, 1.6, -10.2, 'x');
+  cyl(g, 0.08, 0.08, 1.4, dark, 0, -1.15, 3.4); bx(g, 0.4, 0.4, 0.5, dark, 0, -0.95, 3.0);   // chin gun
+  for (const s of [1, -1]) {
+    bx(g, 2.2, 0.18, 1.0, body, s * 1.8, -0.1, 0.2);
+    cyl(g, 0.32, 0.32, 1.6, dark, s * 2.2, -0.55, 0.3); cyl(g, 0.32, 0.32, 1.6, dark, s * 2.85, -0.55, 0.3);
+    for (const z of [1.6, -1.6]) cyl(g, 0.24, 0.24, 0.5, dark, s * 1.0, -1.25, z, 'x');
+  }
+  cyl(g, 0.22, 0.22, 1.1, dark, 0, 1.4, -0.3, 'y');
+  cyl(g, 6.2, 6.2, 0.06, PROP, 0, 2.05, -0.3, 'y');
+  const rotor = new THREE.Group(); rotor.position.set(0, 2.0, -0.3);
+  bx(rotor, 12.4, 0.08, 0.5, dark, 0, 0, 0); bx(rotor, 0.5, 0.08, 12.4, dark, 0, 0, 0);
+  g.add(rotor); g.userData.rotor = rotor;
+  bx(g, 1.52, 0.45, 2.2, tm, 0, 0.5, -1.6);
+  decal(g, team, 1.0, 0.76, -0.3, -1.6, 'right'); decal(g, team, 1.0, -0.76, -0.3, -1.6, 'left');
+  g.userData.teamMat = tm; return g;
+}
+// modern armour. kind: 'mbt' main battle tank, 'ifv' infantry fighting vehicle, 'spg' self-propelled howitzer
+function mModernTank(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team), dark = mat(0x26261f), tr = trackSkin();
+  const body = team === ALLY ? skin('camo', 0xa89a72, 0x8f8360, 0xb6a985, 6) : skin('splinter', 0x5f6e45, 0x4a5838, 0x76804f, 6);
+  const kind = d.kind || 'mbt', hh = kind === 'mbt' ? 0.95 : 1.5;
+  bx(g, 3.5, hh, 6.8, body, 0, 0.6 + hh / 2 + 0.2, -0.1);
+  const glacis = bx(g, 3.5, 0.2, 1.6, body, 0, 0.8 + hh - 0.05, 3.7); glacis.rotation.x = 0.45;
+  bx(g, 0.9, 1.0, 7.2, tr, 1.75, 0.5, 0); bx(g, 0.9, 1.0, 7.2, tr, -1.75, 0.5, 0);
+  for (const x of [-1.78, 1.78]) for (let i = 0; i < 7; i++) cyl(g, 0.38, 0.38, 0.9, dark, x, 0.4, -2.9 + i * 0.97, 'x');
+  for (const s of [1, -1]) bx(g, 0.12, 0.7, 6.6, body, s * 2.24, 1.0, 0);       // side skirts
+  decal(g, team, 0.9, 2.31, 1.05, -1.4, 'right'); decal(g, team, 0.9, -2.31, 1.05, -1.4, 'left');
+  const t = new THREE.Group(), top = 0.8 + hh; g.add(t); g.userData.turrets = [t];
+  if (kind === 'mbt') {
+    t.position.set(0, top, -0.2);
+    bx(t, 3.0, 0.85, 3.4, body, 0, 0.42, 0);
+    for (const s of [1, -1]) { const w = bx(t, 1.0, 0.85, 1.4, body, s * 1.05, 0.42, 1.9); w.rotation.y = -s * 0.5; }
+    bx(t, 2.6, 0.7, 1.3, body, 0, 0.4, -2.2);                                   // bustle
+    cyl(t, 0.13, 0.13, 5.6, dark, 0, 0.45, 4.6); cyl(t, 0.22, 0.22, 0.8, dark, 0, 0.45, 4.0);
+    bx(t, 0.5, 0.4, 0.6, dark, 0.8, 1.05, 0.2); cyl(t, 0.04, 0.04, 1.0, dark, 0.8, 1.1, 0.9);   // remote gun
+    bx(t, 1.4, 0.12, 1.0, tm, -0.4, 0.9, -0.8);
+  } else if (kind === 'ifv') {
+    t.position.set(0.4, top, 0.6);
+    bx(t, 1.9, 0.75, 2.1, body, 0, 0.37, 0);
+    cyl(t, 0.07, 0.07, 3.2, dark, 0, 0.4, 2.6);
+    bx(t, 0.55, 0.55, 1.4, dark, -1.25, 0.55, -0.1);                            // missile launcher box
+    bx(t, 1.2, 0.12, 0.9, tm, 0.1, 0.8, -0.5);
+  } else {
+    t.position.set(0, top, -1.2);
+    bx(t, 3.1, 1.6, 4.2, body, 0, 0.8, 0);
+    cyl(t, 0.2, 0.22, 7, dark, 0, 0.9, 5.6); cyl(t, 0.3, 0.3, 0.7, dark, 0, 0.9, 9.0);
+    bx(t, 1.4, 0.12, 1.2, tm, 0, 1.65, -0.8);
+  }
+  if (d.big) g.scale.setScalar(Math.min(d.big, 1.15));
+  g.userData.teamMat = tm; return g;
+}
+// Humvee / Mengshi: wide, low, armoured, a gunner in the roof ring
+function mHumvee(team) {
+  const g = new THREE.Group(), tm = teamMat(team), dark = mat(0x26261f);
+  const body = team === ALLY ? skin('camo', 0xa89a72, 0x8f8360, 0xb6a985, 5) : skin('splinter', 0x5f6e45, 0x4a5838, 0x76804f, 5);
+  bx(g, 2.6, 0.9, 5.0, body, 0, 1.15, 0);
+  bx(g, 2.5, 0.9, 2.6, body, 0, 2.05, -0.4);
+  bx(g, 2.3, 0.6, 0.08, GLASS, 0, 2.15, 0.92); for (const s of [1, -1]) bx(g, 0.08, 0.5, 1.8, GLASS, s * 1.26, 2.15, -0.3);
+  bx(g, 2.4, 0.5, 1.7, body, 0, 1.75, 1.6);
+  for (const z of [1.7, -1.7]) for (const x of [-1.25, 1.25]) cyl(g, 0.6, 0.6, 0.5, dark, x, 0.6, z, 'x');
+  bx(g, 2.52, 0.12, 2.62, tm, 0, 2.55, -0.4);
+  decal(g, team, 0.9, 1.31, 1.2, -0.6, 'right'); decal(g, team, 0.9, -1.31, 1.2, -0.6, 'left');
+  const t = new THREE.Group(); t.position.set(0, 2.5, -0.6);
+  cyl(t, 0.5, 0.5, 0.2, dark, 0, 0.1, 0, 'y'); bx(t, 0.9, 0.6, 0.1, dark, 0, 0.5, 0.45);
+  bx(t, 0.25, 0.25, 0.7, dark, 0, 0.55, 0.3); cyl(t, 0.05, 0.05, 1.4, dark, 0, 0.55, 1.2);
+  const gn = figure(team === ALLY ? 0x8b8462 : 0x4f6040); gn.position.set(0, 0.5, -0.2); gn.userData.person = true; t.add(gn);
+  g.add(t); g.userData.turrets = [t];
+  g.userData.teamMat = tm; return g;
+}
+// eight-wheeled armoured vehicle with an anti-aircraft turret (Stryker M-SHORAD / PGZ-09)
+function mStryker(team) {
+  const g = new THREE.Group(), tm = teamMat(team), dark = mat(0x26261f);
+  const body = team === ALLY ? skin('camo', 0xa89a72, 0x8f8360, 0xb6a985, 6) : skin('splinter', 0x5f6e45, 0x4a5838, 0x76804f, 6);
+  bx(g, 3.0, 1.5, 7.0, body, 0, 1.6, 0);
+  const f = bx(g, 3.0, 0.2, 1.4, body, 0, 2.15, 3.8); f.rotation.x = 0.55;
+  for (const z of [2.5, 1.2, -1.2, -2.5]) for (const x of [-1.45, 1.45]) cyl(g, 0.6, 0.6, 0.45, dark, x, 0.6, z, 'x');
+  decal(g, team, 0.9, 1.51, 1.8, -0.8, 'right'); decal(g, team, 0.9, -1.51, 1.8, -0.8, 'left');
+  const t = new THREE.Group(); t.position.set(0, 2.35, -0.6);
+  bx(t, 1.8, 0.8, 1.8, body, 0, 0.4, 0);
+  for (const s of [1, -1]) { bx(t, 0.5, 0.6, 1.6, dark, s * 1.2, 0.6, 0.1); for (const y of [0.45, 0.75]) cyl(t, 0.1, 0.1, 0.05, MISSILE, s * 1.2, y, 0.92); }
+  cyl(t, 0.06, 0.06, 2.2, dark, 0.3, 0.45, 1.7);
+  bx(t, 0.6, 0.4, 0.4, dark, 0, 1.0, -0.4);                                     // radar
+  bx(t, 1.2, 0.12, 0.8, tm, 0, 0.82, -0.3);
+  g.add(t); g.userData.turrets = [t];
+  g.userData.teamMat = tm; return g;
+}
+
+// modern warship: grey, angular superstructure with radar panels, one gun forward, missile cells and a helicopter deck aft
+function mModernShip(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team);
+  const len = d.len, beam = d.beam, h = beam * 0.6, deck = h * 0.55;
+  const hullM = skin('hull', team === ALLY ? 0x8a939b : 0x7a858e, 0x5a5048, 0, 16), sup = mat(team === ALLY ? 0x9aa3ab : 0x8a959e), dark = mat(0x2b2f33), deckM = mat(0x55595e);
+  part(g, hullGeo(len, beam, h), [deckM, hullM], 0, -h * 0.45, 0);
+  const tall = d.stealthShip ? 1.4 : 1;
+  const block = part(g, new THREE.CylinderGeometry(beam * 0.3, beam * 0.44, h * 1.3 * tall, 4), sup, 0, deck + h * 0.65 * tall, len * 0.08);
+  block.rotation.y = Math.PI / 4; block.scale.z = len * 0.2 / beam;
+  for (const s of [1, -1]) { const r = bx(g, 0.2, h * 0.5, h * 0.5, mat(0x3a4148), s * beam * 0.27, deck + h * 0.85 * tall, len * 0.08 + beam * 0.15); r.rotation.y = s * 0.6; }   // radar panels
+  bx(g, beam * 0.3, h * 0.15, beam * 0.12, GLASS, 0, deck + h * 1.15 * tall, len * 0.08 + beam * 0.3);
+  if (!d.stealthShip) {
+    const mast = part(g, new THREE.CylinderGeometry(beam * 0.04, beam * 0.12, h * 2, 4), dark, 0, deck + h * 2.2, len * 0.06); mast.rotation.y = Math.PI / 4;
+    bx(g, beam * 0.4, 0.15, 0.15, dark, 0, deck + h * 2.6, len * 0.06);
+    for (let i = 0; i < (d.funnels || 1); i++) bx(g, beam * 0.26, h * 0.7, len * 0.05, sup, 0, deck + h * 0.55, -len * 0.06 - i * len * 0.08);
+  }
+  const vls = mat(0x3d4247), nV = d.vls || 2;
+  for (let i = 0; i < nV; i++) bx(g, beam * 0.4, 0.15, len * 0.07, vls, 0, deck + 0.05, (i % 2 ? -1 : 1) * len * (0.2 + Math.floor(i / 2) * 0.08));
+  bx(g, beam * 0.7, 0.12, len * 0.14, mat(0x6b7076), 0, deck + 0.07, -len * 0.38);                 // helicopter deck
+  bx(g, beam * 0.5, 0.14, 0.3, mat(0xe0e0d8), 0, deck + 0.08, -len * 0.38);
+  const turrets = [], tz = [];
+  for (let i = 0; i < d.turrets[0]; i++) tz.push(len * (0.32 - i * 0.08));
+  for (let i = 0; i < d.turrets[1]; i++) tz.push(-len * (0.27 + i * 0.06));
+  for (const z of tz) {
+    const t = new THREE.Group(); t.position.set(0, deck, z);
+    const sh = part(t, new THREE.CylinderGeometry(beam * 0.12, beam * 0.22, h * 0.4, 6), sup, 0, h * 0.2, 0); sh.scale.z = 1.3;
+    cyl(t, beam * 0.025, beam * 0.03, beam * 0.9, dark, 0, h * 0.25, beam * 0.55);
+    g.add(t); turrets.push(t);
+  }
+  bx(g, 0.15, 2.2, 3.4, tm, 0, deck + h * 1.4 * tall, -len * 0.02);
+  bx(g, beam * 0.5, 0.2, len * 0.12, tm, 0, deck + h * 1.32 * tall, len * 0.08);
+  for (let i = 0; i < 4; i++) {
+    const f = figure(team === ALLY ? 0x2f4a6e : 0x30384a);
+    f.position.set((Math.random() < 0.5 ? -1 : 1) * beam * 0.36, deck + 0.75, (Math.random() - 0.5) * len * 0.7); f.userData.person = true; g.add(f);
+  }
+  g.userData.turrets = turrets; g.userData.teamMat = tm; return g;
+}
+// nuclear attack submarine: smooth hull, tall sail with planes, cross-shaped tail
+function mModernSub(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team), len = d.len * 1.15, r = d.beam / 2;
+  const hull = mat(team === ALLY ? 0x25292d : 0x2c3238), dark = mat(0x16181a);
+  cyl(g, r, r, len * 0.62, hull, 0, -r * 0.3, 0);
+  const n = part(g, new THREE.SphereGeometry(r, 10, 7), hull, 0, -r * 0.3, len * 0.31); n.scale.z = 1.6;
+  cyl(g, r, r * 0.15, len * 0.3, hull, 0, -r * 0.3, -len * 0.46);
+  bx(g, r * 0.55, r * 1.6, len * 0.12, hull, 0, r * 1.1, len * 0.14);
+  bx(g, r * 2.6, 0.2, len * 0.04, hull, 0, r * 1.3, len * 0.15);
+  bx(g, r * 0.57, 0.4, len * 0.121, tm, 0, r * 1.85, len * 0.14);
+  cyl(g, 0.12, 0.12, r, dark, 0, r * 2.3, len * 0.16, 'y');
+  bx(g, r * 2.4, 0.2, len * 0.05, hull, 0, -r * 0.3, -len * 0.56); bx(g, 0.2, r * 2.4, len * 0.05, hull, 0, -r * 0.3, -len * 0.56);
+  bx(g, 0.15, 2, 2.6, tm, 0, r * 0.9 + 1.4, -len * 0.56);
+  const t = new THREE.Group(); t.position.set(0, r * 0.7, len * 0.25); g.add(t);   // (the deck gun is gone; torpedoes and missiles fire from the hull)
+  g.userData.turrets = [t]; g.userData.teamMat = tm; return g;
+}
 function buildModel(d, team) {
   switch (d.model) {
     case 'carrier': return mCarrier(team, d);
     case 'outpost': return mOutpost(team);
     case 'seafort': return mSeaFort(team);
     case 'fighter': return mFighter(team, d);
+    case 'jet': return mJet(team, d);
+    case 'flywing': return mFlyingWing(team, d);
+    case 'jetbomber': return mJetBomber(team, d);
+    case 'a10': return mA10(team, d);
+    case 'jetliner': return mJetliner(team, d);
+    case 'attackheli': return mAttackHeli(team, d);
+    case 'moderntank': return mModernTank(team, d);
+    case 'humvee': return mHumvee(team, d);
+    case 'stryker': return mStryker(team, d);
     case 'bomber': return mBomber(team, d);
     case 'heli': return mHeli(team);
     case 'truck': return mTruck(team);
@@ -585,7 +881,7 @@ function buildModel(d, team) {
     case 'b52': return mB52(team);
     case 'tank': return mTank(team, d);
     case 'halftrack': return mHalftrack(team);
-    case 'squad': return mSquad(team);
+    case 'squad': return mSquad(team, d);
     case 'ship': return mShip(team, d);
     case 'merchant': return mMerchant(team, d);
     case 'house': return mHouse(team);

@@ -252,6 +252,26 @@ const MOD_THEATRE = {
     z23: 'Type 052D Destroyer', sboot: 'Type 022 Missile Boat', uboat: 'Type 093 Sub', hipper: 'Type 055 Cruiser', bismarck: 'Type 055 Flagship', zeppelin: 'Fujian Carrier', tirpitz: 'Type 076 Assault Carrier',
     freighter: 'COSCO Freighter', mfp: 'Type 071 Landing Ship'
   },
+  // modern shapes and performance, per unit (both sides listed)
+  looks: {
+    spitfire: { model: 'jet', speed: 145 }, mustang: { model: 'jet', twinTail: 1, speed: 160 }, p38: { model: 'jet', stealth: 1, big: 1.1, speed: 170 },
+    avenger: { model: 'jetliner', engines: 2, big: 0.75, speed: 125 }, r4: { model: 'attackheli', speed: 68 },
+    b25: { model: 'a10', big: 1, speed: 115 }, b17: { model: 'jetbomber', engines: 4, speed: 135 }, b24: { model: 'flywing', speed: 140 },
+    c54: { model: 'jetliner', highWing: 1, engines: 4, big: 1.05, speed: 120 },
+    bf109: { model: 'jet', canard: 1, speed: 145 }, fw190: { model: 'jet', twinTail: 1, speed: 160 }, bf110: { model: 'jet', stealth: 1, canard: 1, big: 1.15, speed: 170 },
+    fi167: { model: 'bomber', engines: 2, big: 0.6, cargoLook: 1 }, fa223: { model: 'attackheli', speed: 68 },
+    ju88: { model: 'jet', big: 1.2, speed: 125 }, he111: { model: 'jetbomber', engines: 2, speed: 125 }, me264: { model: 'flywing', speed: 140 },
+    me323: { model: 'jetliner', highWing: 1, engines: 4, big: 1.05, speed: 120 },
+    troops: { uni: 0x8b8462, helm: 0x6e6a4e, legs: 0x7a7356 }, grenadier: { uni: 0x4f6040, helm: 0x46553a, legs: 0x3f4c34 },
+    jeep: { model: 'humvee' }, kubel: { model: 'humvee' }, halftrack: { model: 'stryker' }, flakwagen: { model: 'stryker' },
+    sherman: { model: 'moderntank', kind: 'ifv' }, panzer4: { model: 'moderntank', kind: 'ifv' },
+    priest: { model: 'moderntank', kind: 'spg' }, wespe: { model: 'moderntank', kind: 'spg' },
+    pershing: { model: 'moderntank', kind: 'mbt' }, tiger: { model: 'moderntank', kind: 'mbt' },
+    ward: { modern: 1, turrets: [1, 0], vls: 2 }, z23: { modern: 1, turrets: [1, 0], vls: 2 }, pt: { modern: 1, turrets: [1, 0], vls: 0 }, sboot: { modern: 1, turrets: [1, 0], vls: 0 },
+    gato: { modern: 1 }, uboat: { modern: 1 }, atlanta: { modern: 1, turrets: [1, 1], vls: 4 }, hipper: { modern: 1, turrets: [1, 1], vls: 4 },
+    iowa: { modern: 1, stealthShip: 1, turrets: [2, 0], vls: 4 }, bismarck: { modern: 1, turrets: [1, 0], vls: 4 },
+    arizona: { modern: 1, turrets: [1, 1], vls: 6 }, tirpitz: { modern: 1, turrets: [1, 1], vls: 6 }, essex: { modern: 1 }, zeppelin: { modern: 1 }
+  },
   // secondary-weapon labels (the Chinese counterparts pick these up too)
   alts: { troops: 'Javelin', r4: 'Hellfires', b24: 'Nuclear bomb', b25: 'Bombs' },
   // descriptions that name WW2 equipment; the Chinese counterparts pick these up too

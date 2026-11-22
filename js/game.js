@@ -1125,7 +1125,7 @@ function setPlayer(u) {
   $('vname').textContent = u.def.name;
   $('vdomain').textContent = (u.def.heli ? 'Helicopter' : u.def.sub ? 'Submarine' : { air: 'Aircraft', land: 'Ground forces', sea: 'Warship' }[u.def.domain]) + ' · crew ' + u.def.crew;
   $('w2row').style.display = u.def.alt ? 'flex' : 'none'; if (u.def.alt) $('w2n').textContent = u.def.alt.label;
-  $('w1n').textContent = u.def.gun ? (u.def.gun.kind === 'shell' ? 'Main guns' : 'Machine guns') : 'Unarmed';
+  $('w1n').textContent = u.def.gun ? u.def.gunLabel || (u.def.gun.kind === 'shell' ? 'Main guns' : 'Machine guns') : 'Unarmed';
   const tc = $('touch'); tc.classList.toggle('heli', !!u.def.heli); tc.classList.toggle('sub', !!u.def.sub); tc.classList.toggle('noalt', !u.def.alt);
   if (u.def.alt) $('tAlt').textContent = u.def.alt.label.split(' ')[0];
   $('tDive').textContent = u.diveT > 0.5 ? 'Rise' : 'Dive';

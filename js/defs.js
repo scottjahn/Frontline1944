@@ -193,6 +193,7 @@ mirror('freighter', 'liberty', 'Axis Freighter');
 mirror('mfp', 'lst', 'Marinefährprahm', { cargo: ['panzer4', 'panzer4', 'flakwagen', 'grenadier'] });
 
 for (const k in TH.names) DEFS[k].name = TH.names[k];
+if (TH.looks) for (const k in TH.looks) { Object.assign(DEFS[k], TH.looks[k]); if (/^(jet|a10|attackheli)$/.test(DEFS[k].model)) DEFS[k].gunLabel = 'Cannon'; }
 if (TH.alts) for (const k in DEFS) { const l = TH.alts[k] || TH.alts[DEFS[k].base]; if (l && DEFS[k].alt) DEFS[k].alt = Object.assign({}, DEFS[k].alt, { label: l }); }
 if (TH.descs) for (const k in DEFS) { const d = TH.descs[k] || TH.descs[DEFS[k].base]; if (d) DEFS[k].desc = d; }
 
