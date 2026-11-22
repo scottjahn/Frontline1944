@@ -1,6 +1,7 @@
 'use strict';
 // ---------- constants & unit definitions ----------
-const TEAM_NAME = ['Allied', 'Axis'];
+const SIDES = TH.sides || { adj: ['Allied', 'Axis'], pl: ['Allies', 'Axis'] };
+const TEAM_NAME = SIDES.adj, SIDE_PL = SIDES.pl;          // 'Allied' / 'the Allies' (or 'US' / 'the Americans')
 const TEAM_COL = [0x3a78ff, 0xd83030];
 // The battlefield is the theatre's map box seen from above: x runs west to east, z north to south.
 const MAP = { x: 7000, z: 3750 };
@@ -41,7 +42,7 @@ const DEFS = {};
 
 function def(id, o) { o.id = id; DEFS[id] = o; return o; }
 function mirror(id, base, name, extra) {
-  return def(id, Object.assign({}, DEFS[base], { name, team: AXIS }, extra || {}));
+  return def(id, Object.assign({}, DEFS[base], { name, team: AXIS, base }, extra || {}));
 }
 // tier   = the permanent unlock tier (per branch: air / land / sea) the vehicle belongs to
 // cost   = war-chest price of an extra computer-controlled escort (your own vehicle is free once its tier is unlocked)
@@ -192,6 +193,8 @@ mirror('freighter', 'liberty', 'Axis Freighter');
 mirror('mfp', 'lst', 'Marinefährprahm', { cargo: ['panzer4', 'panzer4', 'flakwagen', 'grenadier'] });
 
 for (const k in TH.names) DEFS[k].name = TH.names[k];
+if (TH.alts) for (const k in DEFS) { const l = TH.alts[k] || TH.alts[DEFS[k].base]; if (l && DEFS[k].alt) DEFS[k].alt = Object.assign({}, DEFS[k].alt, { label: l }); }
+if (TH.descs) for (const k in DEFS) { const d = TH.descs[k] || TH.descs[DEFS[k].base]; if (d) DEFS[k].desc = d; }
 
 // ---- BUILDINGS (shared by both teams) ----
 def('hq', { name: 'Headquarters', domain: 'bld', model: 'hq', cost: 0, hp: 6000, radius: 16, centerY: 6, armor: 1, people: 10, job: 'staff', perHead: 0 });

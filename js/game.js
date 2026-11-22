@@ -188,7 +188,7 @@ function beachNear(x, z) {             // downhill from a place to the nearest s
 function ferry(ids) {
   const src = PT(INVADE.col, INVADE.lane), dst = ENG[ENG.length - 1];
   const u = sealift(AXIS, ids, dst, INVADE.fromSea ? null : src);
-  msg(`WARNING: Axis landing craft are ${INVADE.fromSea ? 'closing on' : 'crossing from ' + src.name + ' to'} ${dst.name}!`, 'bad');
+  msg(`WARNING: ${TEAM_NAME[AXIS]} landing craft are ${INVADE.fromSea ? 'closing on' : 'crossing from ' + src.name + ' to'} ${dst.name}!`, 'bad');
   return u;
 }
 // ---- island warfare (the Pacific): ground forces cannot drive from one island to the next, so they go ashore
@@ -333,7 +333,7 @@ function sealift(team, ids, to, from) {
 function unload(u) {
   for (const id of u.cargo) { const q = landSpot(u.landPt.x, u.landPt.z, 0, 45); spawn(id, u.team, q[0], q[1], { yaw: u.yaw }).lane = u.landLane; }
   if (u.team === ALLY) msg(`${u.def.name} landed ${u.cargo.length} units on the beach`, 'good');
-  else if (u.landLane === ENG_LANE) msg(`Axis troops are ashore in ${HOME_NAME}! ${u.cargo.length} units landed near ${ENG[ENG.length - 1].name}.`, 'bad');
+  else if (u.landLane === ENG_LANE) msg(`${TEAM_NAME[AXIS]} troops are ashore in ${HOME_NAME}! ${u.cargo.length} units landed near ${ENG[ENG.length - 1].name}.`, 'bad');
   u.cargo = null;
 }
 function requisition(id, team) {
@@ -539,7 +539,7 @@ function nukeBlast(p) {
     const dd = distToUnit(u, pos);
     if (dd < R) damage(u, p.dmg * (1 - dd / R) * (u.def.model === 'hq' ? 0.35 : 1), p.owner, p.pl);
   }
-  msg(p.team === ALLY ? 'ATOMIC BOMB DETONATED. Everything beneath it is gone.' : 'The Axis have dropped an atomic bomb!', p.team === ALLY ? 'gold' : 'bad');
+  msg(p.team === ALLY ? 'ATOMIC BOMB DETONATED. Everything beneath it is gone.' : `The ${SIDE_PL[AXIS]} have dropped an atomic bomb!`, p.team === ALLY ? 'gold' : 'bad');
 }
 function impact(p, hit, th) {
   if (p.kind === 'nuke') { nukeBlast(p); return; }
@@ -586,8 +586,8 @@ function defect(u, pl) {
   if (u.team === ALLY) {
     stats.defect++;
     const bonus = pl ? bountyOf(u.def) : 0; money += bonus;
-    msg(`${u.def.name} strikes her colours and DEFECTS to the Allies!${bonus ? ' +$' + bonus : ''}`, 'gold');
-  } else msg(`Mutiny! ${u.def.name} has defected to the Axis!`, 'bad');
+    msg(`${u.def.name} strikes her colours and DEFECTS to the ${SIDE_PL[ALLY]}!${bonus ? ' +$' + bonus : ''}`, 'gold');
+  } else msg(`Mutiny! ${u.def.name} has defected to the ${SIDE_PL[AXIS]}!`, 'bad');
 }
 const WRECK_MAT = [0x1d1b19, 0x2e2a26, 0x3a2a20].map(c => new THREE.MeshLambertMaterial({ color: c }));
 function makeWreck(u) {
@@ -1028,13 +1028,13 @@ function raids(dt) {
   if (Math.random() < 0.45 && Account.has(bid)) {          // level-bomber formation crossing the front from its own rear
     const lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane), bv = behind(team, sp.lane, sp.col), f = frontPos(lane), yaw = Math.atan2(-bv[0], -bv[1]);
     for (let i = 0; i < 3; i++) spawn(bid, team, cx(f.x + bv[0] * (2300 + i * 45) - bv[1] * (i - 1) * 55), cz(f.z + bv[1] * (2300 + i * 45) + bv[0] * (i - 1) * 55), { alt: 210, raid: true, yaw });
-    msg(team === ALLY ? 'Allied bomber formation crossing the front!' : 'WARNING: Axis bomber formation inbound!', team === ALLY ? 'good' : 'bad');
+    msg(team === ALLY ? `${TEAM_NAME[ALLY]} bomber formation crossing the front!` : `WARNING: ${TEAM_NAME[AXIS]} bomber formation inbound!`, team === ALLY ? 'good' : 'bad');
     return;
   }
   if (!Account.has(tid) || !units.some(u => u.team !== team && u.def.domain === 'sea')) return;
   const sp = stage(team, SEA_LANE), bv = behind(team, sp.lane, sp.col), f = frontPos(SEA_LANE), r = rnd(1100, 1700), n = 2 + (Math.random() < 0.4 ? 1 : 0);
   for (let i = 0; i < n; i++) spawn(tid, team, cx(f.x + bv[0] * r - bv[1] * i * 40), cz(f.z + bv[1] * r + bv[0] * i * 40), { alt: 110, yaw: Math.atan2(-bv[0], -bv[1]), raid: true });
-  msg(team === ALLY ? 'Allied torpedo bombers inbound over the sea!' : 'WARNING: Axis torpedo bombers hunting our ships!', team === ALLY ? 'good' : 'bad');
+  msg(team === ALLY ? `${TEAM_NAME[ALLY]} torpedo bombers inbound over the sea!` : `WARNING: ${TEAM_NAME[AXIS]} torpedo bombers hunting our ships!`, team === ALLY ? 'good' : 'bad');
 }
 // ---- capture points: destroy the command post, then hold the ground (or the water) to take the point
 const BEAM_GEO = new THREE.CylinderGeometry(5, 5, 320, 8, 1, true);
@@ -1063,14 +1063,14 @@ function capture(p, team, byPlayer) {
     if (byPlayer) { stats.credits += 250; stats.capCr += 250; money += 400; }
     banner(p.name + (p.eng ? ' retaken' : ' captured'), p.eng ? 'The invaders are pushed back toward the sea' : TH.str.advance);
     msg(`${p.name} is ours!` + (byPlayer ? '  +$400 · +250 credits' : ''), 'gold');
-  } else { banner(p.name + ' lost', p.eng ? `The invasion of ${HOME_NAME} advances` : TH.str.retreat); msg(`The Axis have taken ${p.name}!`, 'bad'); }
+  } else { banner(p.name + ' lost', p.eng ? `The invasion of ${HOME_NAME} advances` : TH.str.retreat); msg(`The ${SIDE_PL[AXIS]} have taken ${p.name}!`, 'bad'); }
 }
 function updatePoints(dt) {
   capT -= dt; if (capT > 0) return; capT = 0.5;
   for (const p of POINTS) {
     if (p.post && p.post.dead) {
       const old = p.owner; p.post = null; setOwner(p, -1);
-      msg(old === AXIS ? `${p.name}: Axis command post destroyed. Move in and hold it!` : `${p.name}: our command post has fallen! Hold the ground or lose the sector.`, old === AXIS ? 'good' : 'bad');
+      msg(old === AXIS ? `${p.name}: ${TEAM_NAME[AXIS]} command post destroyed. Move in and hold it!` : `${p.name}: our command post has fallen! Hold the ground or lose the sector.`, old === AXIS ? 'good' : 'bad');
     }
     p.contest = false;
     if (p.post) continue;
@@ -1277,7 +1277,7 @@ function toggleMap(on) {
 }
 function renderMenu() {
   const a = Account.data, mode = state;
-  $('menuTitle').textContent = mode === 'dead' ? 'Vehicle lost' : mode === 'map' ? 'Campaign map' : 'Frontline 1944';
+  $('menuTitle').textContent = mode === 'dead' ? 'Vehicle lost' : mode === 'map' ? 'Campaign map' : (TH.game || 'Frontline 1944');
   $('menuSub').textContent = mode === 'dead' ? 'The wreck stays where it fell. Pick a sector on the map and a vehicle to rejoin the battle.'
     : mode === 'map' ? 'The battle is paused. Redeploy to another sector, visit the Armory, or end the operation and bank your credits.'
       : TH.str.goal;
@@ -1334,7 +1334,7 @@ function renderArmory() {
     box.append(col);
   }
   const note = document.createElement('div'); note.className = 'note';
-  note.textContent = 'Unlocks are permanent. Credits are paid out when a battle ends. The Axis field the same tiers you have unlocked, so the war escalates with you.';
+  note.textContent = `Unlocks are permanent. Credits are paid out when a battle ends. The ${SIDE_PL[AXIS]} field the same tiers you have unlocked, so the war escalates with you.`;
   box.append(note);
 }
 // take command of a vehicle in the selected sector: free in any unlocked tier
@@ -1365,9 +1365,9 @@ function endBattle(result) {
   const total = rows.reduce((t, r) => t + r[1], 0);
   Account.reward({ credits: total, kills: stats.kills, win, campaignWon: result === 'won', owners: result ? null : POINTS.map(p => p.owner) });
   $('overTitle').textContent = result === 'won' ? 'Campaign won' : result === 'lost' ? 'Campaign lost' : gain > 0 ? 'Ground gained' : gain < 0 ? 'Ground lost' : 'Stalemate';
-  $('overSub').textContent = result === 'won' ? 'The Axis headquarters is rubble. A new campaign begins, and you keep everything you have unlocked.'
-    : result === 'lost' ? 'Allied headquarters has fallen. The campaign starts over, but your unlocks and credits are safe.'
-      : `The operation is over. The Allies hold ${allyOwned()} of ${POINTS.length} points; the front stays where you left it for the next battle.`;
+  $('overSub').textContent = result === 'won' ? `The ${TEAM_NAME[AXIS]} headquarters is rubble. A new campaign begins, and you keep everything you have unlocked.`
+    : result === 'lost' ? `The ${TEAM_NAME[ALLY]} headquarters has fallen. The campaign starts over, but your unlocks and credits are safe.`
+      : `The operation is over. The ${SIDE_PL[ALLY]} hold ${allyOwned()} of ${POINTS.length} points; the front stays where you left it for the next battle.`;
   const box = $('overRows'); box.innerHTML = '';
   for (const r of rows.concat([['Credits earned', total], ['Credits in the bank', Account.data.credits]])) {
     const a = document.createElement('span'), b = document.createElement('b'); a.textContent = r[0]; b.textContent = (r[0] === 'Credits in the bank' ? '' : '+') + r[1].toLocaleString(); box.append(a, b);
@@ -1601,7 +1601,7 @@ function updateHUD(dt) {
   if (cp) {
     const fits = cp.sea ? u.def.domain === 'sea' : u.def.domain === 'land';
     let txt, k = 0;
-    if (cp.post) txt = cp.owner === ALLY ? `${cp.name} · held by the Allies` : `${cp.name} · destroy the Axis command post to open it for capture`;
+    if (cp.post) txt = cp.owner === ALLY ? `${cp.name} · held by the ${SIDE_PL[ALLY]}` : `${cp.name} · destroy the ${TEAM_NAME[AXIS]} command post to open it for capture`;
     else if (!fits) txt = `${cp.name} · open: only ${cp.sea ? 'warships' : 'ground forces'} can capture it`;
     else if (cp.contest) txt = `${cp.name} · contested! Clear the enemy out`;
     else if (!canCap(cp, ALLY)) txt = `${cp.name} · cut off: take ${(cp.eng ? ENG[cp.col - 1] : PT(cp.col - 1, cp.lane)).name} first`;
@@ -1611,7 +1611,7 @@ function updateHUD(dt) {
   const tp = $('target');
   if (zoomTarget && !zoomTarget.dead) {
     tp.style.display = 'block'; const d = zoomTarget.def;
-    $('tkind').textContent = 'Axis ' + ({ air: 'aircraft', land: 'ground unit', sea: 'vessel', bld: 'building' }[d.domain]);
+    $('tkind').textContent = TEAM_NAME[AXIS] + ' ' + ({ air: 'aircraft', land: 'ground unit', sea: 'vessel', bld: 'building' }[d.domain]);
     $('tname').textContent = d.name; $('thp').firstElementChild.style.width = clamp(zoomTarget.hp / zoomTarget.maxHp * 100, 0, 100) + '%';
     $('tdist').textContent = Math.round(zoomTarget.pos.distanceTo(focusMesh.position) * 3) + ' ft';
   } else tp.style.display = 'none';
@@ -1761,7 +1761,7 @@ function init() {
     let c = 0, bd = 1e9;                   // the sector whose nearest point is closest to the click
     for (const p of POINTS) { const q = euPoint(p, cv.width, cv.height), dd = Math.hypot(q[0] - mx, q[1] - my); if (dd < bd) { bd = dd; c = secOf(p); } }
     if (canDeployIn(c)) { selCol = c; renderMenu(); }
-    else $('sectorInfo').innerHTML = `The <b>${secName(c)}</b> sector is not in Allied hands: you can only deploy where the Allies hold a point.`;
+    else $('sectorInfo').innerHTML = `The <b>${secName(c)}</b> sector is not in ${TEAM_NAME[ALLY]} hands: you can only deploy where the ${SIDE_PL[ALLY]} hold a point.`;
   });
   $('helpCampaign').innerHTML = TH.help;
   $('resetLink').onclick = () => { if (confirm('Start again from scratch? Every unlock, credit and the campaign map is lost.')) { Account.reset(); location.reload(); } };

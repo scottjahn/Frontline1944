@@ -2,7 +2,7 @@
 // ---------- theatres of war ----------
 // Each theatre is one edition of the campaign: its own map, chain of sectors, home bases, seasons and unit names.
 // Everything here is in longitude / latitude (east-positive; the Pacific uses 0..360 so it does not wrap at the
-// date line). defs.js turns it into battlefield coordinates. Pick one with ?front=eu|pac or from the menu.
+// date line). defs.js turns it into battlefield coordinates. Pick one with ?front=eu|pac|mod or from the menu.
 const ALLY = 0, AXIS = 1;
 const FRONT_KEY = 'frontline1944.front';
 
@@ -95,19 +95,23 @@ const PAC_ISLANDS = [
   { name: 'Okinawa', c: [128.2, 26.6], rx: 3.8, ry: 1.6, rot: 0.75, sea: [131.8, 24.6], pts: ['Shuri Castle', 'Hagushi Beach', 'Okinawa Waters'] }
 ];
 const PAC_HOME_LANES = [[[186.8, 30.4], [186.8, 27.4], [189.5, 24.4]], [[130.6, 32.1], [131.3, 33.2], [134.0, 30.4]]];
-function pacLanes() {
-  const lanes = [[PAC_HOME_LANES[0][0]], [PAC_HOME_LANES[0][1]], [PAC_HOME_LANES[0][2]]];
-  let prev = [202, 21.3];                                       // Pearl Harbor
-  for (const s of PAC_ISLANDS) {
+// lanes for an island-hopping theatre: two points on each island (the landing beach faces the way the Allies
+// come from) and one offshore, between the two home lanes. 'from' is where the Allied fleet sails from.
+function islandLanes(isles, home, from) {
+  const lanes = [[home[0][0]], [home[0][1]], [home[0][2]]];
+  let prev = from;
+  for (const s of isles) {
+    if (s.lanes) { for (let l = 0; l < 3; l++) lanes[l].push(s.lanes[l]); prev = s.lanes[1]; continue; }   // a sector on the mainland
     const k = s.rx * 0.46, dx = Math.cos(s.rot) * k, dy = Math.sin(s.rot) * k;
     let a = [s.c[0] + dx, s.c[1] + dy], b = [s.c[0] - dx, s.c[1] - dy];
     if (Math.hypot(a[0] - prev[0], a[1] - prev[1]) > Math.hypot(b[0] - prev[0], b[1] - prev[1])) [a, b] = [b, a];
-    lanes[0].push(b); lanes[1].push(a); lanes[2].push(s.sea);     // the landing beach faces the way the Allies come from
+    lanes[0].push(b); lanes[1].push(a); lanes[2].push(s.sea);
     prev = s.c;
   }
-  for (let l = 0; l < 3; l++) lanes[l].push(PAC_HOME_LANES[1][l]);
+  for (let l = 0; l < 3; l++) lanes[l].push(home[1][l]);
   return lanes;
 }
+function pacLanes() { return islandLanes(PAC_ISLANDS, PAC_HOME_LANES, [202, 21.3]); }    // the fleet sails from Pearl Harbor
 const PAC_THEATRE = {
   id: 'pac', title: 'Pacific', place: 'Pacific', blurb: 'From Pearl Harbor, island by island, to Tokyo',
   box: { lon0: 122, lon1: 210, lat0: -10, lat1: 40 },
@@ -173,7 +177,100 @@ const PAC_THEATRE = {
   }
 };
 
-const THEATRES = { eu: EU_THEATRE, pac: PAC_THEATRE };
+// ---------------------------------------------------------------- Modern Era: the United States against China
+// The Western Pacific today. The islands are drawn larger than life, as in the Pacific campaign; the last two
+// sectors are on the Chinese mainland, so once ashore there the ground forces can drive on to Beijing.
+const MOD_ISLANDS = [
+  { name: 'Okinotori Reef', c: [137.6, 19.4], rx: 1.9, ry: 1.1, rot: 0.2, sea: [138.6, 16.6], pts: ['Reef Station', 'Lagoon Beach', 'Okinotori Waters'] },
+  { name: 'Okinawa', c: [129.4, 27.0], rx: 2.1, ry: 1.0, rot: 0.75, sea: [132.0, 24.6], pts: ['Kadena Air Base', 'Naha Beach', 'Okinawa Waters'] },
+  { name: 'Senkaku', c: [124.6, 25.4], rx: 1.5, ry: 0.85, rot: 0.1, sea: [125.4, 23.0], pts: ['Uotsuri Peak', 'Senkaku Beach', 'Senkaku Waters'] },
+  { name: 'Taiwan', c: [121.7, 23.6], rx: 2.1, ry: 1.0, rot: 1.3, sea: [123.6, 20.6], pts: ['Kaohsiung', 'Taipei Harbor', 'Luzon Strait'] },
+  { name: 'Zhoushan', c: [124.0, 30.4], rx: 1.5, ry: 0.85, rot: 0.6, sea: [125.8, 29.0], pts: ['Zhoushan Port', 'Zhujiajian Beach', 'Zhoushan Waters'] },
+  { name: 'Qingdao', lanes: [[119.7, 36.4], [120.2, 36.15], [121.4, 35.2]], pts: ['Laoshan', 'Qingdao Beach', 'Yellow Sea'] },
+  { name: 'Tianjin', lanes: [[117.0, 39.35], [117.55, 39.15], [119.0, 38.75]], pts: ['Tianjin Airport', 'Tianjin Port', 'Bohai Sea'] }
+];
+const MOD_HOME_LANES = [[[147.6, 15.9], [147.4, 14.7], [150.8, 13.2]], [[116.0, 39.7], [116.9, 39.75], [119.9, 39.2]]];
+const MOD_GUAM = islandBlob([146.0, 15.0], 4.4, 2.3, 0.05, 61);
+const MOD_THEATRE = {
+  id: 'mod', title: 'Modern Era', place: 'Western Pacific', blurb: 'USA vs China: from Guam across the Pacific to Beijing',
+  game: 'Frontline: Modern Era',
+  box: { lon0: 100, lon1: 160, lat0: 11, lat1: 42 },
+  face: [-1, 1],               // the Americans look west, toward China
+  base: [[148.0, 14.6], [116.4, 39.95]],       // US HQ on Guam, Chinese HQ at Beijing
+  airport: [[145.0, 14.6], [115.0, 39.3]],
+  home: [
+    { depot: [146.4, 16.2], airDepot: [151.5, 12.6], dockFrom: [148.0, 14.6], dockDir: [0, 1], dockYaw: 0, seaFar: [150.0, 11.8] },
+    { depot: [115.9, 40.7], airDepot: [113.2, 40.4], dockFrom: [117.55, 39.0], dockDir: [1, 0], dockYaw: Math.PI / 2, seaFar: [119.6, 38.7] }
+  ],
+  land: [
+    // Guam (one big stylised island)
+    MOD_GUAM,
+    // the Asian mainland: Vietnam, China and Korea
+    [[98, 10], [106.5, 10.2], [108, 10.9], [109.2, 11.6], [109.3, 13.5], [108.8, 15.2], [107.8, 16.3], [106.6, 17.6], [105.9, 19.4], [106.6, 20.6], [108, 21.6], [109.6, 21.5], [110.2, 20.6], [110.6, 21.2], [111.8, 21.6], [113, 22], [113.6, 22.6], [114.3, 22.3], [115.5, 22.8], [116.6, 23.2], [117.6, 23.8], [118.4, 24.4], [119.2, 25], [119.6, 26], [119.9, 26.7], [120.5, 27.5], [121.1, 28.2], [121.7, 29], [122, 29.9], [121, 30.4], [121.9, 30.9], [121.9, 31.7], [121, 32.3], [120.9, 33], [120.3, 34.2], [119.3, 34.8], [119.6, 35.5], [120.3, 36], [121, 36.6], [122, 36.9], [122.6, 37.3], [122, 37.6], [121.2, 37.7], [120.2, 37.6], [119.2, 37.2], [118.9, 38], [118, 38.4], [117.6, 38.9], [117.8, 39.3], [118.8, 39.3], [119.5, 39.9], [120.6, 40.5], [121.6, 40.9], [122.3, 40.5], [121.6, 39.6], [121.2, 38.85], [121.8, 39], [122.4, 39.5], [123.4, 39.8], [124.3, 39.95], [125.1, 39.6], [125, 38.8], [125.6, 37.8], [126.6, 37.6], [126.4, 36.4], [126.5, 35], [126.4, 34.4], [127.4, 34.6], [128.5, 34.9], [129.3, 35.3], [129.5, 36.5], [129.4, 37.8], [128.4, 38.6], [127.5, 39.6], [128.6, 40.6], [129.8, 41], [130.6, 42.4], [131, 44], [98, 44]],
+    // Hainan
+    [[108.6, 19.2], [109.6, 20.1], [110.7, 20.1], [111.0, 19.6], [110.5, 18.7], [109.6, 18.2], [108.7, 18.5]],
+    // Japan: Honshu, Kyushu, Shikoku
+    PAC_THEATRE.land[1], PAC_THEATRE.land[2], PAC_THEATRE.land[3],
+    // the Philippines: Luzon, the Visayas, Mindanao
+    PAC_THEATRE.land[6], PAC_THEATRE.land[7], PAC_THEATRE.land[8],
+    // a few small islands with no fighting on them
+    islandBlob([125.4, 33.4], 0.6, 0.4, 0.2, 9), islandBlob([140.0, 25.0], 0.6, 0.4, 0.7, 15), islandBlob([154.5, 19.5], 0.5, 0.35, 0.3, 17),
+    // the battle islands
+    ...MOD_ISLANDS.filter(s => s.c).map((s, i) => islandBlob(s.c, s.rx, s.ry, s.rot, 41 + i * 4))
+  ],
+  sectors: MOD_ISLANDS.map(s => s.name),
+  laneTags: [' Base', ' Beach', ' Waters'],
+  pointNames: MOD_ISLANDS.map(s => s.pts),
+  lanes: islandLanes(MOD_ISLANDS, MOD_HOME_LANES, [148.0, 14.6]),
+  homeland: { name: 'Guam', names: ['Andersen AFB', 'Hagåtña', 'Apra Harbor'],
+    nodes: [[147.6, 15.2], [146.6, 15.9], [145.0, 15.4], [143.2, 14.9], [140.4, 15.6]] },
+  invade: { col: 1, lane: 1, fromSea: true },      // while China holds Okinawa its landing ships can reach the beaches of Guam
+  islands: true,
+  // China has struck first: it holds every island west of Okinotori Reef and its marines are ashore on Guam
+  start: (c, l) => c === 0 ? ALLY : AXIS,
+  homeStart: [ALLY, ALLY, AXIS],
+  seasons: PAC_SEASONS,
+  grid: [5, 5],
+  sides: { adj: ['US', 'Chinese'], pl: ['Americans', 'Chinese'] },
+  labels: [['GUAM', 146.0, 18.4, 12], ['CHINA', 112.5, 31.5, 16], ['JAPAN', 136.8, 38.6, 13], ['KOREA', 127.4, 38.2, 9], ['PHILIPPINES', 123.6, 16.0, 10], ['VIETNAM', 105.2, 16.4, 9],
+    ['Pacific Ocean', 153, 25, 15, 1], ['Philippine Sea', 133, 21.5, 11, 1], ['East China Sea', 126.0, 30.5, 10, 1], ['South China Sea', 114.5, 17.5, 11, 1], ['Yellow Sea', 123.4, 35.6, 10, 1]],
+  hqLabels: ['US HQ · Guam', 'Chinese HQ · Beijing'], hqBelow: [1, 0],
+  str: {
+    goal: 'China has struck first: it holds every island from Okinawa to Taiwan and its marines are ashore on Guam. Fight back island by island, from Okinotori Reef to Taiwan, then land on the Chinese coast and drive on to the headquarters in Beijing. Click a sector on the map, then choose a vehicle.',
+    advance: 'Another sector taken. On toward Beijing', retreat: 'China pushes us back toward Guam'
+  },
+  help: '<b>The campaign.</b> Seven battlegrounds lie between Guam and Beijing, each with two points ashore and one at sea: five islands, then Qingdao and Tianjin on the Chinese coast. China has struck first and the Americans are nearly beaten: only Okinotori Reef still holds and Chinese marines have landed on Guam. Ground forces cannot drive from island to island: pick the next sector on the map to make an amphibious landing on its beach (landing ships and paratroopers go in the same way). Destroy a point\'s command post, then hold the ground (or the water with warships) to capture it. A headquarters can only be attacked once its home sector is breached. Guam has three points of its own (Apra Harbor, Hagåtña, Andersen AFB): while China holds Okinawa its landing ships come ashore at Apra Harbor, and if all three fall the US headquarters is open.<br>',
+  names: {
+    c47: 'C-130 Hercules', spitfire: 'F-16 Fighting Falcon', mustang: 'F/A-18 Super Hornet', avenger: 'P-8 Poseidon', r4: 'AH-64 Apache', p38: 'F-35 Lightning II',
+    b25: 'A-10 Warthog', b17: 'B-1B Lancer', b24: 'B-2 Spirit', b52: 'B-52 Stratofortress', c54: 'C-17 Globemaster',
+    truck: 'HEMTT Truck', troops: 'Army Rifle Squad', jeep: 'Humvee', halftrack: 'Stryker M-SHORAD', sherman: 'M2 Bradley', priest: 'M109 Paladin', pershing: 'M1A2 Abrams',
+    liberty: 'Container Ship', lst: 'San Antonio Landing Ship', ward: 'Arleigh Burke Destroyer', pt: 'Mark VI Patrol Boat', gato: 'Virginia-class Sub',
+    atlanta: 'Ticonderoga Cruiser', essex: 'USS Gerald R. Ford', iowa: 'USS Zumwalt', arizona: 'Arsenal Ship',
+    bf109: 'J-10 Vigorous Dragon', fw190: 'J-16 Strike Fighter', bf110: 'J-20 Mighty Dragon', fi167: 'KQ-200 Sub Hunter', fa223: 'Z-10 Attack Helicopter',
+    ju88: 'JH-7 Flying Leopard', he111: 'H-6K Bomber', me264: 'H-20 Stealth Bomber', ju52: 'Y-9 Transport', me323: 'Y-20 Kunpeng',
+    grenadier: 'PLA Rifle Squad', kubel: 'Dongfeng Mengshi', flakwagen: 'PGZ-09 AA Gun', panzer4: 'ZBD-04 Fighting Vehicle', wespe: 'PLZ-05 Howitzer', tiger: 'Type 99A Tank', opel: 'Shaanxi Truck',
+    z23: 'Type 052D Destroyer', sboot: 'Type 022 Missile Boat', uboat: 'Type 093 Sub', hipper: 'Type 055 Cruiser', bismarck: 'Type 055 Flagship', zeppelin: 'Fujian Carrier', tirpitz: 'Type 076 Assault Carrier',
+    freighter: 'COSCO Freighter', mfp: 'Type 071 Landing Ship'
+  },
+  // secondary-weapon labels (the Chinese counterparts pick these up too)
+  alts: { troops: 'Javelin', r4: 'Hellfires', b24: 'Nuclear bomb', b25: 'Bombs' },
+  // descriptions that name WW2 equipment; the Chinese counterparts pick these up too
+  descs: {
+    troops: 'Eight soldiers with a Javelin missile launcher.', jeep: 'Fast armored scout car with a .50 cal.', halftrack: 'Anti-aircraft vehicle. Shreds aircraft and drones.',
+    sherman: 'Infantry fighting vehicle. Rapid-fire cannon.', priest: 'Self-propelled howitzer. Huge range and blast, slow to reload.', pershing: 'Main battle tank. 120mm cannon.',
+    spitfire: 'Agile jet fighter. Cannon + one bomb.', mustang: 'Faster, tougher carrier jet. Two bombs.', p38: 'Stealth fighter. Hard-hitting cannon, three bombs.',
+    avenger: 'Sub-hunting patrol plane. Drops torpedoes on ships.', r4: 'Attack helicopter. Hovers, strafes, fires Hellfire rockets.',
+    b25: 'Ground-attack jet. Four bombs, fast turnaround.', b17: 'Supersonic heavy bomber with defensive guns.', b24: 'Stealth bomber carrying a nuclear bomb. One drop obliterates everything beneath it.',
+    c47: 'Cargo plane. Flies supply runs and pays cash on every return.', c54: 'Jet transport. Parachutes ground reinforcements in.',
+    ward: 'Guided-missile destroyer. Guns, torpedoes, AA, depth charges.', pt: 'Very fast patrol boat with torpedoes and depth charges.',
+    gato: 'Nuclear attack submarine. Dive (C) to vanish from guns; hunts with torpedoes.', atlanta: 'Guided-missile cruiser. Heavy AA screen.',
+    iowa: 'Stealth destroyer with long-range guns.', arizona: 'THE top warship. A floating missile battery with a wall of AA.',
+    essex: 'Supercarrier. Launches fighter flights from her deck (Space) and lets you take off far from home.',
+    liberty: 'Merchant vessel. Pays cash every delivery.', lst: 'Landing ship. Puts two fighting vehicles, an AA vehicle and a rifle squad on the beach.'
+  }
+};
+
+const THEATRES = { eu: EU_THEATRE, pac: PAC_THEATRE, mod: MOD_THEATRE };
 let THEATRE_ID = 'eu';
 try {
   const q = new URLSearchParams(location.search).get('front'), s = q || localStorage.getItem(FRONT_KEY);
