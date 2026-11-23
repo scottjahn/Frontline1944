@@ -467,17 +467,24 @@ function playerLock() {
   return airLock(ALLY, camera.position, aimDir, 0.3, a.range);
 }
 let missileWarnT = -99;
-function fireMissile(u, aim) {
-  const a = u.def.alt, dir = fwd(u.yaw, u.pitch, V());
-  const tgt = u === player ? playerLock() : (u.target && u.target.def.domain === 'air' ? u.target : null);
-  const o = T2.copy(u.pos).addScaledVector(dir, u.def.radius * 0.6); o.y -= 1.2;
-  if (!tgt) dir.subVectors(aim, o).normalize().lerp(fwd(u.yaw, u.pitch, T3), 0.5).normalize();   // no lock: fly where the pilot aims
-  const p = addProj('aam', o, dir.multiplyScalar(Math.max(u.speed, 60) + 40), u, a.dmg, a.splash, a.range / a.vel * 1.5);
+function fireMissile(u, aim, lock) {
+  const a = u.def.alt, gnd = u.def.domain !== 'air', dir = fwd(u.yaw, u.pitch, V());
+  const tgt = u === player ? playerLock() : lock || (u.target && u.target.def.domain === 'air' ? u.target : null);
+  const o = T2.copy(u.pos);
+  if (gnd) {                                 // surface-to-air: rises off the launcher rails, nosing up toward the target
+    o.y += (u.def.centerY || 1.5) + 2.5;
+    dir.subVectors(tgt ? centerOf(tgt, T3) : aim, o).normalize(); dir.y += 0.6; dir.normalize();
+  } else {
+    o.addScaledVector(dir, u.def.radius * 0.6); o.y -= 1.2;
+    if (!tgt) dir.subVectors(aim, o).normalize().lerp(fwd(u.yaw, u.pitch, T3), 0.5).normalize();   // no lock: fly where the pilot aims
+  }
+  const p = addProj('aam', o, dir.multiplyScalar(gnd ? 50 : Math.max(u.speed, 60) + 40), u, a.dmg, a.splash, a.range / a.vel * 1.5);
+  if (gnd) fx(o, 0xd8d4cc, 1.4, 5, 1.2, 1, 0.8);
   p.tgt = tgt; p.vmax = a.vel; p.turn = a.turn;
   if (u !== player) u.cdAlt *= 1.8;
   sfx('shell', u.pos);
-  if (tgt === player && time - missileWarnT > 3) { missileWarnT = time; msg('MISSILE INBOUND! Turn hard to shake it off!', 'bad'); }
-  else if (u === player) msg(tgt ? `Fox two! Missile away at the ${tgt.def.name}` : 'Missile away, no lock', tgt ? 'good' : '');
+  if (tgt === player && time - missileWarnT > 3) { missileWarnT = time; msg(gnd ? 'SAM LAUNCH! Turn hard to shake it off!' : 'MISSILE INBOUND! Turn hard to shake it off!', 'bad'); }
+  else if (u === player) msg(tgt ? `${gnd ? 'Missile away' : 'Fox two! Missile away'} at the ${tgt.def.name}` : 'Missile away, no lock', tgt ? 'good' : '');
 }
 function steerMissile(p, dt) {
   let sp = p.vel.length(); sp = Math.min(p.vmax, sp + 320 * dt);
@@ -523,11 +530,11 @@ function fireGun(u, aim, xs) {
   u.cdGun = g.rate * World.reload * (u === player ? 1 : 1.6);
   shoot(u, g, aim, xs || 0);
 }
-function fireAlt(u, aim) {
+function fireAlt(u, aim, lock) {
   const a = u.def.alt; if (!a || u.cdAlt > 0) return false;
   u.cdAlt = a.cd * World.reload;
   if (a.kind === 'launch') { if (!launchWing(u)) u.cdAlt = 4; return true; }
-  if (a.kind === 'aam') { fireMissile(u, aim); return true; }
+  if (a.kind === 'aam') { fireMissile(u, aim, lock); return true; }
   if (a.kind === 'bomb' || a.kind === 'nuke') { u.bombQ = a.count; u.bombT = 0; }
   else if (a.kind === 'torpedo') {
     let yaw, ox, oz, oy;
@@ -912,8 +919,13 @@ function aiLand(u, dt) {
     centerOf(t, TA).addScaledVector(t.vel, d3 / d.gun.vel);
     u.aimYaw = Math.atan2(TA.x - u.pos.x, TA.z - u.pos.z);
     if (d3 < d.gun.range) fireGun(u, TA, 0.02);
-    if (d.alt && u.cdAlt <= 0 && d3 < d.alt.range && t.def.armor) fireAlt(u, TA);
+    if (d.alt && d.alt.kind !== 'aam' && u.cdAlt <= 0 && d3 < d.alt.range && t.def.armor) fireAlt(u, TA);
   } else u.aimYaw = u.yaw;
+  if (d.alt && d.alt.kind === 'aam' && u.cdAlt <= 0) {     // SAM launcher: fires on any aircraft in range, even while its gun is busy
+    let air = t && t.def.domain === 'air' ? t : null;
+    if (!air) { let bd = d.alt.range * 0.8 * World.vis; for (const e of units) if (e.team !== u.team && !e.dead && e.def.domain === 'air') { const dd = u.pos.distanceTo(e.pos); if (dd < bd) { bd = dd; air = e; } } }
+    if (air) { const dd = u.pos.distanceTo(air.pos); if (dd > 100 && dd < d.alt.range * 0.8 * World.vis) fireAlt(u, air.pos, air); }
+  }
 }
 function dockOf(team) { for (const u of units) if (u.def.model === 'dock' && u.team === team) return u; return null; }
 function aiSea(u, dt) {

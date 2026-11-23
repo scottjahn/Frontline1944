@@ -191,6 +191,8 @@ const MOD_ISLANDS = [
 ];
 // radar-guided air-to-air missile for the Modern Era fighters (replaces their bombs)
 const AAM = dmg => ({ kind: 'aam', dmg, splash: 12, cd: 5, vel: 270, range: 1500, turn: 2.4, label: 'Missiles' });
+// surface-to-air missile for the Stryker M-SHORAD and PGZ-09: slower to reload, but fired from the ground
+const SAM = { kind: 'aam', dmg: 130, splash: 14, cd: 8, vel: 250, range: 1400, turn: 2.2, label: 'SAM Missiles' };
 const MOD_HOME_LANES = [[[147.6, 15.9], [147.4, 14.7], [150.8, 13.2]], [[116.0, 39.7], [116.9, 39.75], [119.9, 39.2]]];
 const MOD_GUAM = islandBlob([146.0, 15.0], 4.4, 2.3, 0.05, 61);
 const MOD_THEATRE = {
@@ -265,7 +267,7 @@ const MOD_THEATRE = {
     ju88: { model: 'jet', big: 1.2, speed: 125 }, he111: { model: 'jetbomber', engines: 2, speed: 125 }, me264: { model: 'flywing', speed: 140 },
     me323: { model: 'jetliner', highWing: 1, engines: 4, big: 1.05, speed: 120 },
     troops: { uni: 0x8b8462, helm: 0x6e6a4e, legs: 0x7a7356 }, grenadier: { uni: 0x4f6040, helm: 0x46553a, legs: 0x3f4c34 },
-    jeep: { model: 'humvee' }, kubel: { model: 'humvee' }, halftrack: { model: 'stryker' }, flakwagen: { model: 'stryker' },
+    jeep: { model: 'humvee' }, kubel: { model: 'humvee' }, halftrack: { model: 'stryker', alt: SAM }, flakwagen: { model: 'stryker', alt: SAM },
     sherman: { model: 'moderntank', kind: 'ifv' }, panzer4: { model: 'moderntank', kind: 'ifv' },
     priest: { model: 'moderntank', kind: 'spg' }, wespe: { model: 'moderntank', kind: 'spg' },
     pershing: { model: 'moderntank', kind: 'mbt' }, tiger: { model: 'moderntank', kind: 'mbt' },
@@ -278,7 +280,7 @@ const MOD_THEATRE = {
   alts: { troops: 'Javelin', r4: 'Hellfires', b24: 'Nuclear bomb', b25: 'Bombs' },
   // descriptions that name WW2 equipment; the Chinese counterparts pick these up too
   descs: {
-    troops: 'Eight soldiers with a Javelin missile launcher.', jeep: 'Fast armored scout car with a .50 cal.', halftrack: 'Anti-aircraft vehicle. Shreds aircraft and drones.',
+    troops: 'Eight soldiers with a Javelin missile launcher.', jeep: 'Fast armored scout car with a .50 cal.', halftrack: 'Anti-aircraft vehicle. Machine guns + homing surface-to-air missiles.',
     sherman: 'Infantry fighting vehicle. Rapid-fire cannon.', priest: 'Self-propelled howitzer. Huge range and blast, slow to reload.', pershing: 'Main battle tank. 120mm cannon.',
     spitfire: 'Agile jet fighter. Cannon + homing air-to-air missiles.', mustang: 'Faster, tougher carrier jet. Cannon + stronger missiles.', p38: 'Stealth fighter. Hard-hitting cannon, deadliest missiles.',
     avenger: 'Sub-hunting patrol plane. Drops torpedoes on ships.', r4: 'Attack helicopter. Hovers, strafes, fires Hellfire rockets.',
