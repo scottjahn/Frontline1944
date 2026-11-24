@@ -450,13 +450,15 @@ function addProj(kind, o, vel, owner, dmg, splash, life) {
   const p = { kind, pos: o.clone(), prev: o.clone(), vel, team: owner.team, owner, pl: owner === player, dmg, splash, life, mesh: m, wake: 0, swim: false };
   projs.push(p); return p;
 }
+// stealth (lowObs) aircraft can only be spotted, locked and shot at from much closer in
+function spotR(e, r) { return e.def.lowObs ? r * 0.4 : r; }
 // ---- homing air-to-air missiles (Modern Era fighters)
 // the enemy aircraft closest to a direction, within a cone of maxAng radians and the missile's range
 function airLock(team, from, dir, maxAng, range) {
   let best = null, ba = maxAng;
   for (const e of units) {
     if (e.team === team || e.dead || e.def.domain !== 'air') continue;
-    centerOf(e, TC).sub(from); const dist = TC.length(); if (dist > range * World.vis || dist < 20) continue;
+    centerOf(e, TC).sub(from); const dist = TC.length(); if (dist > spotR(e, range * World.vis) || dist < 20) continue;
     const ang = Math.acos(clamp(TC.dot(dir) / dist, -1, 1)); if (ang < ba) { ba = ang; best = e; }
   }
   return best;
@@ -521,7 +523,7 @@ function shoot(u, w, aim, xs) {
   const dir = V().subVectors(aim, o).normalize();
   if (nose && dir.dot(T3) < 0.93) dir.copy(T3);
   const sp = (w.spread || 0.004) + xs; dir.x += rnd(-sp, sp); dir.y += rnd(-sp, sp); dir.z += rnd(-sp, sp); dir.normalize();
-  addProj(w.kind, o, dir.multiplyScalar(w.vel), u, w.dmg, w.splash || 0, w.range / w.vel);
+  const p = addProj(w.kind, o, dir.multiplyScalar(w.vel), u, w.dmg, w.splash || 0, w.range / w.vel); if (w.ap) p.ap = 1;
   sfx(w.kind === 'bullet' ? 'gun' : 'shell', u.pos);
   if (w.kind === 'shell') fx(o, 0xffd9a0, 0.8, 3.2, 0.15);
 }
@@ -610,7 +612,7 @@ function nukeBlast(p) {
 function impact(p, hit, th) {
   if (p.kind === 'nuke') { nukeBlast(p); return; }
   const pos = p.pos.clone(), wet = th < World.water;
-  if (hit) damage(hit, p.dmg * (p.kind === 'bullet' && hit.def.armor ? 0.2 : 1), p.owner, p.pl);
+  if (hit) damage(hit, p.dmg * (p.kind === 'bullet' && hit.def.armor ? (p.ap ? 0.7 : 0.2) : 1), p.owner, p.pl);   // ap: armour-piercing cannon
   if (p.splash) {
     explode(pos, p.splash * 0.8);
     if (wet || p.kind === 'torpedo') splashFx(pos, p.splash * 0.9);
@@ -752,7 +754,7 @@ function pickTarget(u) {
     if (e.team === u.team) continue;
     let w = weight(d, e); if (w <= 0) continue;
     if (e.def.model === 'hq' && !hqOpen(e.team)) continue;
-    const dist = u.pos.distanceTo(e.pos); if (dist > sight) continue;
+    const dist = u.pos.distanceTo(e.pos); if (dist > spotR(e, sight)) continue;
     if (e.def.sub && e.dive > 0.5 && (!(d.asw || d.sub || d.role === 'torpedo') || dist > 450)) continue;   // only sonar finds a dived sub
     if (d.sub && NONCOMBAT[e.def.role]) w *= 2;
     const ed = e.def.domain;
@@ -764,7 +766,7 @@ function pickTarget(u) {
 }
 function pickAA(u) {
   const r = u.def.aa.range * Math.max(World.vis, 0.5); let best = null, bd = r;
-  for (const e of units) { if (e.team === u.team || e.def.domain !== 'air') continue; const dd = u.pos.distanceTo(e.pos); if (dd < bd) { bd = dd; best = e; } }
+  for (const e of units) { if (e.team === u.team || e.def.domain !== 'air') continue; const dd = u.pos.distanceTo(e.pos); if (dd < bd && dd < spotR(e, r)) { bd = dd; best = e; } }
   u.aaTarget = best;
 }
 function autoAA(u, dt) {
@@ -923,7 +925,7 @@ function aiLand(u, dt) {
   } else u.aimYaw = u.yaw;
   if (d.alt && d.alt.kind === 'aam' && u.cdAlt <= 0) {     // SAM launcher: fires on any aircraft in range, even while its gun is busy
     let air = t && t.def.domain === 'air' ? t : null;
-    if (!air) { let bd = d.alt.range * 0.8 * World.vis; for (const e of units) if (e.team !== u.team && !e.dead && e.def.domain === 'air') { const dd = u.pos.distanceTo(e.pos); if (dd < bd) { bd = dd; air = e; } } }
+    if (!air) { let bd = d.alt.range * 0.8 * World.vis; for (const e of units) if (e.team !== u.team && !e.dead && e.def.domain === 'air') { const dd = u.pos.distanceTo(e.pos); if (dd < bd && dd < spotR(e, d.alt.range * 0.8 * World.vis)) { bd = dd; air = e; } } }
     if (air) { const dd = u.pos.distanceTo(air.pos); if (dd > 100 && dd < d.alt.range * 0.8 * World.vis) fireAlt(u, air.pos, air); }
   }
 }

@@ -291,7 +291,71 @@ const MOD_THEATRE = {
     iowa: 'Stealth destroyer with long-range guns.', arizona: 'THE top warship. A floating missile battery with a wall of AA.',
     essex: 'Supercarrier. Launches fighter flights from her deck (Space) and lets you take off far from home.',
     liberty: 'Merchant vessel. Pays cash every delivery.', lst: 'Landing ship. Puts two fighting vehicles, an AA vehicle and a rifle squad on the beach.'
-  }
+  },
+  // the A-10 is a flying gunship: its 30mm GAU-8 cannon punches through armour
+  tweaks: {
+    b25: { hp: 520, gunLabel: 'GAU-8 Cannon', gun: { kind: 'bullet', dmg: 13, rate: 0.03, range: 640, vel: 820, spread: 0.014, ap: 1 },
+      desc: 'Flying gunship. The 30mm GAU-8 cannon shreds tanks; four bombs too. Built to take a beating.' }
+  },
+  // vehicles that exist only in this theatre: copied from `base`, changed by `o`, added to the shop after `after`.
+  // `cn` is the Chinese counterpart. lowObs: stealth, enemies only spot and lock it at close range.
+  extras: [
+    { id: 'mq9', base: 'b25', shop: 'Air', after: 'avenger',
+      o: { tier: 2, name: 'MQ-9 Reaper', model: 'drone', big: 1, role: 'bomber', cost: 600, aiCost: 380, hp: 150, speed: 95, turn: 1.0, crew: 0, radius: 8, camDist: 40, camH: 9,
+        desc: 'Armed drone. Cheap, quiet, drops two precision bombs.', gunLabel: 'Machine gun', gun: { kind: 'bullet', dmg: 5, rate: 0.14, range: 420, vel: 600, spread: 0.02 },
+        alt: { kind: 'bomb', dmg: 200, splash: 26, count: 2, cd: 7, label: 'Guided bombs' } },
+      cn: { id: 'wingloong', name: 'Wing Loong II' } },
+    { id: 'f14', base: 'mustang', shop: 'Air', after: 'mustang',
+      o: { tier: 3, name: 'F-14 Tomcat', model: 'f14', big: 1.05, cost: 1100, aiCost: 620, hp: 260, speed: 165, turn: 1.4, crew: 2,
+        desc: 'Swing-wing fleet interceptor. Long-range Phoenix missiles hit from very far away.',
+        alt: { kind: 'aam', dmg: 150, splash: 14, cd: 7, vel: 300, range: 2300, turn: 1.9, label: 'Phoenix Missiles' } },
+      cn: { id: 'j15', name: 'J-15 Flying Shark' } },
+    { id: 'f15', base: 'mustang', shop: 'Air', after: 'p38',
+      o: { tier: 4, name: 'F-15EX Eagle II', model: 'jet', twinTail: 1, big: 1.2, cost: 1600, aiCost: 850, hp: 340, speed: 178, turn: 1.5, radius: 8,
+        desc: 'Heavy air-superiority fighter. Fast, tough, and its missiles reload quickly.',
+        gun: { kind: 'bullet', dmg: 14, rate: 0.065, range: 620, vel: 760, spread: 0.008 }, alt: Object.assign(AAM(135), { cd: 3.5 }) },
+      cn: { id: 'j11', name: 'J-11B Flanker' } },
+    { id: 'f117', base: 'b25', shop: 'Air', after: 'b25',
+      o: { tier: 4, name: 'F-117 Nighthawk', model: 'f117', big: 1, lowObs: 1, cost: 1800, aiCost: 950, hp: 300, speed: 125, turn: 1.0, crew: 1, radius: 9,
+        desc: 'Stealth attack jet. Enemies only see it up close. Two laser-guided 2,000 lb bombs.', gunLabel: 'Machine gun',
+        gun: { kind: 'bullet', dmg: 5, rate: 0.12, range: 420, vel: 620, spread: 0.02 },
+        alt: { kind: 'bomb', dmg: 420, splash: 42, count: 2, cd: 9, label: 'Laser-guided bombs' } },
+      cn: { id: 'gj11', name: 'GJ-11 Sharp Sword', o: { model: 'flywing', big: 0.42 } } },
+    { id: 'f22', base: 'p38', shop: 'Air', after: 'f15',
+      o: { tier: 5, name: 'F-22 Raptor', model: 'jet', stealth: 1, raptor: 1, big: 1.25, lowObs: 1, cost: 2400, aiCost: 1300, max: 2, hp: 360, speed: 190, turn: 1.85, radius: 8,
+        desc: 'THE air-superiority fighter. Stealthy, supercruising, deadliest missiles that reload fast.',
+        gun: { kind: 'bullet', dmg: 17, rate: 0.06, range: 640, vel: 780, spread: 0.007 }, alt: Object.assign(AAM(170), { cd: 3.5 }) },
+      cn: { id: 'j35', name: 'J-35 Stealth Fighter', o: { canard: 0 } } },
+    { id: 'rangers', base: 'troops', shop: 'Land', after: 'troops',
+      o: { tier: 3, name: 'Army Rangers', cost: 450, aiCost: 300, hp: 220, speed: 16, uni: 0x5c5a48, helm: 0x3a3a30, legs: 0x4c4a3c,
+        desc: 'Elite squad with Stinger missiles that home on aircraft.', gun: { kind: 'bullet', dmg: 7, rate: 0.09, range: 320, vel: 560, spread: 0.025 },
+        alt: { kind: 'aam', dmg: 110, splash: 12, cd: 7, vel: 230, range: 1000, turn: 2.4, label: 'Stinger Missiles' } },
+      cn: { id: 'plasf', name: 'PLA Special Forces', o: { uni: 0x3f5038, helm: 0x34422e, legs: 0x36442f } } },
+    { id: 'himars', base: 'priest', shop: 'Land', after: 'priest',
+      o: { tier: 4, name: 'M142 HIMARS', model: 'launcher', kind: 'himars', cost: 1500, aiCost: 850, hp: 340, speed: 26, turn: 1.3, crew: 3,
+        desc: 'Rocket artillery truck. Fires guided rockets at very long range.', gunLabel: 'Guided rockets',
+        gun: { kind: 'shell', dmg: 210, splash: 30, rate: 4.5, range: 980, vel: 340 } },
+      cn: { id: 'phl16', name: 'PHL-16 Rocket Launcher' } },
+    { id: 'patriot', base: 'halftrack', shop: 'Land', after: 'himars',
+      o: { tier: 4, name: 'Patriot Battery', model: 'launcher', kind: 'patriot', cost: 1400, aiCost: 800, hp: 360, speed: 18, turn: 1.0, crew: 4,
+        desc: 'Long-range air defence. Heavy surface-to-air missiles reach far across the sky.',
+        alt: { kind: 'aam', dmg: 200, splash: 18, cd: 6, vel: 300, range: 2200, turn: 2.0, label: 'Patriot Missiles' } },
+      cn: { id: 'hq9', name: 'HQ-9 SAM Battery' } },
+    { id: 'lcs', base: 'pt', shop: 'Sea', after: 'pt',
+      o: { tier: 2, name: 'Freedom Littoral Ship', modern: 1, turrets: [1, 0], vls: 1, cost: 800, aiCost: 500, hp: 620, speed: 40, turn: 0.75, len: 40, beam: 8, crew: 70, camDist: 58, camH: 18, radius: 7, armor: 1,
+        desc: 'Fast coastal warship. 57mm gun, torpedoes and depth charges.', gunLabel: 'Main guns',
+        gun: { kind: 'shell', dmg: 45, splash: 8, rate: 0.7, range: 560, vel: 420 }, aa: { dmg: 4, rate: 0.2, range: 320 } },
+      cn: { id: 't056', name: 'Type 056 Corvette' } },
+    { id: 'ffg62', base: 'ward', shop: 'Sea', after: 'lcs',
+      o: { tier: 3, name: 'Constellation Frigate', modern: 1, turrets: [1, 0], vls: 2, cost: 1400, aiCost: 800, hp: 1100, speed: 26, len: 60, beam: 8, crew: 200,
+        desc: 'Guided-missile frigate. Sub hunter with a strong AA screen.', aa: { dmg: 6, rate: 0.13, range: 420 } },
+      cn: { id: 't054', name: 'Type 054A Frigate' } },
+    { id: 'ohio', base: 'gato', shop: 'Sea', after: 'gato',
+      o: { tier: 4, name: 'Ohio-class SSGN', modern: 1, cost: 2200, aiCost: 1300, max: 1, hp: 1100, speed: 19, turn: 0.4, len: 72, beam: 8, crew: 155, camDist: 80, camH: 22, radius: 7,
+        desc: 'Huge guided-missile submarine. Dive (C) to vanish; heavy torpedoes reload fast.',
+        alt: { kind: 'torpedo', dmg: 560, splash: 14, cd: 3.5, label: 'Heavy torpedoes' } },
+      cn: { id: 't096', name: 'Type 096 Sub' } }
+  ]
 };
 
 const THEATRES = { eu: EU_THEATRE, pac: PAC_THEATRE, mod: MOD_THEATRE };

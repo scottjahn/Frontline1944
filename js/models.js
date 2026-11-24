@@ -613,7 +613,10 @@ function mJet(team, d) {
   const twin = d.twinTail || d.stealth;
   if (twin) for (const s of [1, -1]) { cyl(g, 0.55, 0.55, 0.3, dark, s * 0.5, 0, -7.2); cyl(g, 0.45, 0.45, 0.2, GLOW, s * 0.5, 0, -7.35); }
   else { cyl(g, 0.7, 0.7, 0.4, dark, 0, 0, -7.25); cyl(g, 0.55, 0.55, 0.2, GLOW, 0, 0, -7.45); }
-  if (d.canard || d.stealth && team === AXIS) {
+  if (d.raptor && team === ALLY) {
+    wings(g, 0.8, 1.8, -4.4, 5.2, -3.6, -4.8, 0.2, body, -0.1, 0);                 // big diamond wing
+    wings(g, 0.8, -5.0, -7.0, 3.2, -6.8, -7.4, 0.14, body, 0, 0);
+  } else if (d.canard || d.stealth && team === AXIS) {
     wings(g, 0.8, 2.6, -4.2, 5.4, -3.2, -4.6, 0.22, body, -0.1, 0);                 // big delta
     wings(g, 0.9, 4.6, 3.4, 2.6, 3.6, 3.0, 0.14, body, 0.25, 0);                    // canards
   } else {
@@ -634,7 +637,7 @@ function mJet(team, d) {
   g.userData.teamMat = tm; return g;
 }
 // stealth flying wing (B-2 / H-20)
-function mFlyingWing(team) {
+function mFlyingWing(team, d) {
   const g = new THREE.Group(), tm = teamMat(team), body = skin('metal', team === ALLY ? 0x3f454b : 0x4a535b, 0, 0, 14), dark = mat(0x1d1f22);
   surf(g, [[0, 10], [18, -4], [17, -6.5], [11.5, -3.6], [6, -7.2], [0, -4], [-6, -7.2], [-11.5, -3.6], [-17, -6.5], [-18, -4]], 1.1, body, 0, 0, 0, 14);
   const hump = part(g, new THREE.SphereGeometry(2.6, 12, 6, 0, Math.PI * 2, 0, Math.PI / 2), body, 0, 0.4, 2); hump.scale.set(1.5, 0.6, 3);
@@ -643,7 +646,7 @@ function mFlyingWing(team) {
   for (const s of [1, -1]) bx(g, 2.2, 0.12, 0.7, dark, s * 3.6, 0.6, -3.6);
   for (const s of [1, -1]) bx(g, 2.2, 1.14, 1.3, tm, s * 17.2, 0, -5.1);
   for (const s of [1, -1]) decal(g, team, 2.6, s * 10, 0.6, -2.6, 'up');
-  g.scale.setScalar(1.05);
+  g.scale.setScalar(d && d.big || 1.05);
   g.userData.teamMat = tm; return g;
 }
 // swept-wing heavy jet bomber (B-1B / H-6K)
@@ -857,8 +860,90 @@ function mModernSub(team, d) {
   const t = new THREE.Group(); t.position.set(0, r * 0.7, len * 0.25); g.add(t);   // (the deck gun is gone; torpedoes and missiles fire from the hull)
   g.userData.turrets = [t]; g.userData.teamMat = tm; return g;
 }
+// F-117 Nighthawk: a black faceted arrowhead with swept V-tails and no visible engines
+function mF117(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team), body = skin('metal', team === ALLY ? 0x24272b : 0x2c3238, 0, 0, 10), dark = mat(0x121315);
+  surf(g, [[0, 9], [8.2, -3.6], [6.4, -4.6], [1.6, -3.4], [0, -5.2], [-1.6, -3.4], [-6.4, -4.6], [-8.2, -3.6]], 0.5, body, 0, 0, 0, 10);
+  const top = part(g, new THREE.ConeGeometry(1.9, 10, 4), body, 0, 0.55, 1.2); top.rotation.x = Math.PI / 2; top.rotation.z = Math.PI / 4; top.scale.set(1, 1, 0.35);
+  const can = bx(g, 0.9, 0.35, 1.6, mat(0x3a2f20), 0, 1.0, 4.0); can.rotation.x = -0.2;
+  for (const s of [1, -1]) { const f = fin(g, -2.4, -5.4, 2.8, -4.4, -6.2, body, s * 0.7, 0.4, s * 0.75); }
+  for (const s of [1, -1]) bx(g, 1.4, 0.12, 0.35, dark, s * 1.1, 0.5, -3.6);      // exhaust slots
+  for (const s of [1, -1]) bx(g, 0.8, 0.52, 0.8, tm, s * 7.4, 0, -3.9);
+  for (const s of [1, -1]) decal(g, team, 1.2, s * 3.6, 0.26, -1.6, 'up');
+  if (d.big) g.scale.setScalar(d.big);
+  g.userData.teamMat = tm; return g;
+}
+// F-14 Tomcat / J-15: wide flat body, engines set far apart, twin fins, long swept wings
+function mF14(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team), body = jetSkin(team, d), dark = mat(0x26282b);
+  cyl(g, 0.75, 0.85, 6, body, 0, 0.2, 3);
+  cyl(g, 0.05, 0.75, 3.4, body, 0, 0.2, 7.7);
+  const can = part(g, new THREE.SphereGeometry(0.6, 10, 6), GLASS, 0, 0.9, 4.6); can.scale.set(0.95, 0.85, 2.6);
+  bx(g, 4.2, 0.7, 7, body, 0, 0, -2.4);                                            // flat 'pancake' between the engines
+  for (const s of [1, -1]) {
+    cyl(g, 0.85, 0.9, 9, body, s * 1.75, -0.15, -2.6);
+    cyl(g, 0.7, 0.7, 0.4, dark, s * 1.75, -0.15, -7.2); cyl(g, 0.55, 0.55, 0.2, GLOW, s * 1.75, -0.15, -7.4);
+    bx(g, 0.9, 1.0, 1.6, dark, s * 1.75, -0.15, 1.8);                              // intakes
+  }
+  wings(g, 2.0, 1.6, -1.4, 7.6, -4.4, -5.6, 0.18, body, 0.05, 0);                   // half-swept wings
+  wings(g, 2.0, -5.0, -7.2, 4.4, -6.8, -7.6, 0.14, body, 0, 0);
+  for (const s of [1, -1]) { fin(g, -3.8, -6.6, 2.8, -5.8, -7.2, body, s * 1.75, 0.6, s * 0.12); bx(g, 0.22, 0.4, 1.0, tm, s * 2.05, 3.25, -6.4); }
+  for (const s of [1, -1]) bx(g, 0.5, 0.24, 1.0, tm, s * 7.4, 0.05, -4.9);
+  for (const z of [0.6, -3.0]) for (const x of [-0.8, 0.8]) cyl(g, 0.2, 0.2, 3.2, MISSILE, x, -0.55, z);   // Phoenixes under the belly
+  for (const s of [1, -1]) decal(g, team, 1.3, s * 4.6, 0.15, -3.4, 'up');
+  decal(g, team, 1.0, 2.65, 0, -3.4, 'right'); decal(g, team, 1.0, -2.65, 0, -3.4, 'left');
+  if (d.big) g.scale.setScalar(d.big);
+  g.userData.teamMat = tm; return g;
+}
+// MQ-9 Reaper / Wing Loong: slim body with a bulbous nose, long thin wings, V-tail, pusher propeller
+function mDrone(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team), body = skin('metal', team === ALLY ? 0x9aa1a6 : 0xa3aab0, 0, 0, 8), dark = mat(0x26282b);
+  cyl(g, 0.55, 0.45, 9, body, 0, 0, 0);
+  const n = part(g, new THREE.SphereGeometry(0.75, 10, 7), body, 0, 0.15, 4.6); n.scale.z = 1.5;
+  cyl(g, 0.45, 0.2, 2.4, body, 0, 0, -5.6);
+  part(g, new THREE.SphereGeometry(0.38, 8, 6), mat(0x1b2128), 0, -0.6, 3.2);     // sensor ball
+  wings(g, 0.4, 1.0, -0.4, 10, 0.4, -0.2, 0.14, body, 0.1, 0);
+  for (const s of [1, -1]) { const f = fin(g, -5.0, -6.6, 2.4, -6.2, -7.0, body, s * 0.2, 0.2, s * 0.85); }
+  bx(g, 0.18, 1.4, 0.8, body, 0, -0.85, -5.6);                                     // ventral fin
+  cyl(g, 1.3, 1.3, 0.05, PROP, 0, 0, -6.9);
+  for (const s of [1, -1]) { cyl(g, 0.2, 0.2, 1.8, MISSILE, s * 3.4, -0.4, 0.2); bx(g, 0.5, 0.18, 0.8, tm, s * 9.6, 0.1, 0); }
+  for (const s of [1, -1]) decal(g, team, 0.9, s * 6, 0.2, 0, 'up');
+  if (d.big) g.scale.setScalar(d.big);
+  g.userData.teamMat = tm; return g;
+}
+// wheeled missile launcher. kind 'himars': six-wheel truck with a rocket pod; 'patriot': tractor towing four tall canisters
+function mLauncher(team, d) {
+  const g = new THREE.Group(), tm = teamMat(team), dark = mat(0x26261f);
+  const body = team === ALLY ? skin('camo', 0xa89a72, 0x8f8360, 0xb6a985, 6) : skin('splinter', 0x5f6e45, 0x4a5838, 0x76804f, 6);
+  const pat = d.kind === 'patriot', L = pat ? 8.4 : 7;
+  bx(g, 2.8, 0.6, L, body, 0, 1.2, 0);
+  bx(g, 2.7, 1.7, 2.0, body, 0, 2.2, L / 2 - 1.0);                                // cab
+  bx(g, 2.5, 0.6, 0.08, GLASS, 0, 2.6, L / 2 + 0.01);
+  for (const s of [1, -1]) bx(g, 0.08, 0.5, 1.4, GLASS, s * 1.36, 2.6, L / 2 - 0.9);
+  const zs = pat ? [2.9, 1.6, -1.6, -2.9] : [2.4, -0.8, -2.4];
+  for (const z of zs) for (const x of [-1.35, 1.35]) cyl(g, 0.6, 0.6, 0.5, dark, x, 0.6, z, 'x');
+  decal(g, team, 0.8, 1.41, 1.2, -0.8, 'right'); decal(g, team, 0.8, -1.41, 1.2, -0.8, 'left');
+  const t = new THREE.Group(); t.position.set(0, 1.55, pat ? -1.2 : -1.0);
+  if (pat) {
+    const rack = new THREE.Group(); rack.rotation.x = -0.65; rack.position.set(0, 0.2, -1.5); t.add(rack);
+    for (const x of [-0.55, 0.55]) for (const y of [0.45, 1.35]) { bx(rack, 1.0, 0.85, 5.4, body, x, y, 2.4); cyl(rack, 0.3, 0.3, 0.05, MISSILE, x, y, 5.12); }
+    bx(t, 1.2, 0.12, 0.9, tm, 0, 0.05, 0.8);
+  } else {
+    bx(t, 2.3, 0.4, 2.0, dark, 0, 0.2, 0);
+    const pod = new THREE.Group(); pod.rotation.x = -0.35; pod.position.set(0, 0.4, -0.8); t.add(pod);
+    bx(pod, 2.1, 1.3, 3.6, body, 0, 0.65, 1.6);
+    for (const x of [-0.6, 0, 0.6]) for (const y of [0.35, 0.95]) cyl(pod, 0.22, 0.22, 0.05, MISSILE, x, y, 3.42);
+    bx(pod, 1.2, 0.12, 1.0, tm, 0, 1.32, 1.4);
+  }
+  g.add(t); g.userData.turrets = [t];
+  g.userData.teamMat = tm; return g;
+}
 function buildModel(d, team) {
   switch (d.model) {
+    case 'f117': return mF117(team, d);
+    case 'f14': return mF14(team, d);
+    case 'drone': return mDrone(team, d);
+    case 'launcher': return mLauncher(team, d);
     case 'carrier': return mCarrier(team, d);
     case 'outpost': return mOutpost(team);
     case 'seafort': return mSeaFort(team);

@@ -226,6 +226,15 @@ const SHOP = {
   Sea: ['liberty', 'lst', 'ward', 'pt', 'gato', 'atlanta', 'essex', 'iowa', 'arizona'],
   Buildings: ['house', 'factory', 'aagun']
 };
+// theatre tweaks to existing vehicles, then vehicles that exist only in this theatre (and their enemy counterparts)
+if (TH.tweaks) for (const k in TH.tweaks) Object.assign(DEFS[k], TH.tweaks[k]);
+if (TH.extras) for (const x of TH.extras) {
+  const d = def(x.id, Object.assign({}, DEFS[x.base], { team: ALLY, base: undefined }, x.o));
+  if (!d.gunLabel && /^(jet|a10|f14|attackheli)$/.test(d.model)) d.gunLabel = 'Cannon';
+  const s = SHOP[x.shop], i = s.indexOf(x.after); s.splice(i < 0 ? s.length : i + 1, 0, x.id);
+  ROSTER[ALLY].push(x.id);
+  if (x.cn) { mirror(x.cn.id, x.id, x.cn.name, x.cn.o); ROSTER[AXIS].push(x.cn.id); }
+}
 const BRANCH = { air: 'Air', land: 'Land', sea: 'Sea' };
 const NONCOMBAT = { merchant: 1, cargo: 1, airlift: 1, lander: 1 };
 const INCOME_PERIOD = 5;
