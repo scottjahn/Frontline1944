@@ -1,6 +1,6 @@
 // Frontline 1944 service worker: makes the whole game available offline.
 // Bump VERSION whenever the list of files changes; file contents refresh on their own (see fetch).
-const VERSION = 'v10';
+const VERSION = 'v11';
 const CACHE = 'frontline1944-' + VERSION;
 const FILES = [
   './',
@@ -50,13 +50,14 @@ self.addEventListener('fetch', e => {
   e.respondWith((async () => {
     const cache = await caches.open(CACHE);
     // ignoreSearch: "?touch" and similar launch parameters all map to the same page
+    // the game page is reached as "./" or "index.html"; other pages (the map builder) are cached under their own path
+    const game = req.mode === 'navigate' && /\/(index\.html)?$/.test(url.pathname);
     const hit = await cache.match(req, { ignoreSearch: true }) ||
-                (req.mode === 'navigate' ? await cache.match('index.html') : undefined);
+                (game ? await cache.match('index.html') : undefined);
     const refresh = fetch(req).then(res => {
       if (res && res.ok && res.type === 'basic') {
-        const key = req.mode === 'navigate' ? 'index.html' : url.origin + url.pathname;
-        cache.put(key, res.clone());
-        if (req.mode === 'navigate') cache.put('./', res.clone());
+        cache.put(game ? 'index.html' : url.origin + url.pathname, res.clone());
+        if (game) cache.put('./', res.clone());
       }
       return res;
     });
