@@ -103,10 +103,10 @@ function decal(g, team, size, x, y, z, face) {
         c.fillStyle = '#f2f2f2'; c.beginPath();
         for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, r = i % 2 ? 7.6 : 20; c[i ? 'lineTo' : 'moveTo'](32 + Math.cos(a) * r, 32 + Math.sin(a) * r); }
         c.closePath(); c.fill();
-      } else if (TH.id === 'pac') {             // red disc for Japan
+      } else if ((TH.baseId || TH.id) === 'pac') {             // red disc for Japan
         c.fillStyle = '#f2f2f2'; c.beginPath(); c.arc(32, 32, 29, 0, 6.283); c.fill();
         c.fillStyle = '#c8102e'; c.beginPath(); c.arc(32, 32, 25, 0, 6.283); c.fill();
-      } else if (TH.id === 'mod') {             // red star with a yellow edge for China
+      } else if ((TH.baseId || TH.id) === 'mod') {             // red star with a yellow edge for China
         const star = (r, f) => { c.fillStyle = f; c.beginPath(); for (let i = 0; i < 10; i++) { const a = -Math.PI / 2 + i * Math.PI / 5, q = i % 2 ? r * 0.4 : r; c[i ? 'lineTo' : 'moveTo'](32 + Math.cos(a) * q, 33 + Math.sin(a) * q); } c.closePath(); c.fill(); };
         star(30, '#ffd21f'); star(25, '#d81e1e');
       } else {

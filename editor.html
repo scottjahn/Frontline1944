@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101410">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<title>Map Builder · Frontline 1944</title>
+<style>
+  :root { --amber:#f2c14e; --panel:#141a14; --line:rgba(242,193,78,.35); --ally:#5b93ff; --axis:#ff5a4d; --ink:#e9e6d8; --dim:#a9a58e; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:#0c100c; color:var(--ink); font-family:"Trebuchet MS","Segoe UI",sans-serif; font-size:13px; }
+  body { display:flex; flex-direction:column; }
+  header { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--line); flex-wrap:wrap; }
+  header h1 { margin:0 10px 0 0; font-size:18px; letter-spacing:.12em; color:var(--amber); text-transform:uppercase; }
+  main { flex:1; display:flex; min-height:0; }
+  #stage { flex:1; display:flex; align-items:center; justify-content:center; padding:10px; min-width:0; position:relative; }
+  #map { max-width:100%; max-height:100%; border:1px solid var(--line); border-radius:4px; touch-action:none; cursor:crosshair; background:#163a52; }
+  aside { width:290px; overflow-y:auto; border-left:1px solid var(--line); padding:10px 12px 20px; background:var(--panel); }
+  h3 { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); margin:14px 0 6px; font-weight:700; }
+  h3:first-child { margin-top:2px; }
+  button, select, input[type=text] { font:inherit; color:var(--ink); background:transparent; border:1px solid var(--line); border-radius:4px; padding:6px 9px; }
+  select option { background:#141a14; }
+  input[type=text] { width:100%; background:rgba(255,255,255,.04); }
+  input[type=text]:focus, select:focus { outline:1px solid var(--amber); }
+  button { cursor:pointer; font-weight:700; }
+  button:hover { border-color:var(--amber); }
+  button.main { background:var(--amber); color:#1a1a12; border-color:var(--amber); }
+  button.danger:hover { border-color:var(--axis); color:var(--axis); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .tools { display:grid; grid-template-columns:1fr 1fr; gap:5px; }
+  .tools button { text-align:left; display:flex; align-items:center; gap:7px; font-weight:600; }
+  .tools button.on { background:var(--amber); color:#1a1a12; border-color:var(--amber); }
+  .tools i { width:12px; height:12px; border-radius:3px; display:inline-block; flex:none; border:1px solid rgba(0,0,0,.4); }
+  kbd { font:inherit; font-size:10px; opacity:.6; margin-left:auto; }
+  .row { display:flex; gap:6px; align-items:center; }
+  .row > * { flex:1; }
+  .grid2 { display:grid; grid-template-columns:auto 1fr; gap:4px 8px; align-items:center; }
+  .grid2 span { color:var(--dim); font-size:11px; white-space:nowrap; }
+  input[type=range] { width:100%; accent-color:var(--amber); }
+  .hint { color:var(--dim); font-size:11.5px; line-height:1.5; }
+  #status { margin-left:auto; color:var(--dim); font-size:12px; }
+  #sel { min-height:40px; }
+  .spacer { flex:1; }
+  dialog { background:var(--panel); color:var(--ink); border:1px solid var(--amber); border-radius:6px; padding:18px 20px; width:min(420px, 92vw); }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog h2 { margin:0 0 12px; color:var(--amber); font-size:16px; letter-spacing:.08em; text-transform:uppercase; }
+  dialog label { display:block; margin:10px 0 4px; color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.1em; }
+  dialog select { width:100%; }
+  .choices { display:grid; gap:6px; }
+  .choices label { display:flex; gap:8px; align-items:center; text-transform:none; letter-spacing:0; font-size:13px; color:var(--ink); margin:0; cursor:pointer; }
+  @media (max-width: 760px) { main { flex-direction:column; } aside { width:auto; border-left:0; border-top:1px solid var(--line); max-height:45vh; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Map Builder</h1>
+  <select id="pick" title="Your maps"></select>
+  <button id="bNew">New map</button>
+  <button id="bUndo" title="Undo (Ctrl+Z)">↶ Undo</button>
+  <button id="bRedo" title="Redo (Ctrl+Y)">↷ Redo</button>
+  <button id="bExport">Export</button>
+  <button id="bImport">Import</button>
+  <button id="bDelete" class="danger">Delete</button>
+  <span id="status"></span>
+  <button id="bPlay" class="main">▶ Play this map</button>
+  <a href="index.html"><button>Back to game</button></a>
+  <input type="file" id="file" accept=".json,application/json" hidden>
+</header>
+<main>
+  <div id="stage"><canvas id="map" width="1400" height="750"></canvas></div>
+  <aside>
+    <h3>Map</h3>
+    <input type="text" id="name" maxlength="40" placeholder="Map name">
+    <div class="hint" id="baseInfo" style="margin-top:5px"></div>
+
+    <h3>Tools</h3>
+    <div class="tools" id="tools"></div>
+    <h3>Brush size</h3>
+    <div class="row"><input type="range" id="size" min="40" max="1400" step="10" value="260"><span id="sizeV" style="flex:none;width:58px;text-align:right"></span></div>
+
+    <h3>Selected</h3>
+    <div id="sel" class="hint">Use <b>Move</b> and click a capture point, headquarters or airfield to select it. Drag to move it.</div>
+
+    <h3>Sectors (front to back)</h3>
+    <div class="grid2" id="sectors"></div>
+
+    <h3>Homeland</h3>
+    <div class="grid2" id="homeland"></div>
+
+    <h3>How it plays</h3>
+    <div class="hint">
+      Each of the seven sectors has an inland point, a coast point and a sea point. They are taken in order along each line, and a headquarters can only be attacked once every other point on the map has fallen.<br><br>
+      Land points are nudged onto dry land and sea points out to sea when the battle starts. Mountains and hills are flattened around points, headquarters and airfields (the dashed rings).<br><br>
+      If water splits the coast line, the map plays as an island campaign: ground forces land by sea.<br><br>
+      <b>Mountains</b> and <b>hills</b> slow vehicles and block shells. <b>Forests</b> slow ground forces but hide them and absorb damage. <b>Water</b> carves lakes, rivers and channels. <b>Flatten</b> erases terrain.<br><br>
+      Keys: <b>1–7</b> tools · <b>[ ]</b> brush size · <b>Ctrl+Z / Ctrl+Y</b> undo / redo. Maps save automatically in this browser.
+    </div>
+  </aside>
+</main>
+
+<dialog id="dlgNew">
+  <h2>New map</h2>
+  <form method="dialog">
+    <label>Name</label>
+    <input type="text" id="nName" maxlength="40" value="My battlefield">
+    <label>Based on (map area, units and seasons)</label>
+    <select id="nBase"></select>
+    <label>Start with</label>
+    <div class="choices">
+      <label><input type="radio" name="nStart" value="coast" checked> The real coastline and terrain</label>
+      <label><input type="radio" name="nStart" value="sea"> Open sea (paint your own land)</label>
+      <label><input type="radio" name="nStart" value="land"> Solid land (carve out the water)</label>
+    </div>
+    <div class="row" style="margin-top:16px">
+      <button value="cancel" id="nCancel">Cancel</button>
+      <button value="ok" class="main" id="nOk">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="js/mapdraw.js"></script>
+<script src="js/theatres.js"></script>
+<script src="js/editor.js"></script>
+</body>
+</html>

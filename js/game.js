@@ -213,8 +213,9 @@ function landZone(team, lane, col) {
   const b = beachhead(o, held ? sp : NODE[lane][team === ALLY ? 0 : COLS + 1]);
   return { p: { x: b.x, z: b.z, lane, col: o.col }, assault: true, o };
 }
-// a headquarters can only be hurt once the enemy holds ground in its home sector
-function hqOpen(team) { const c = team === ALLY ? 0 : COLS - 1; return POINTS.some(p => !p.eng && p.col === c && p.owner === 1 - team) || (team === ALLY && ENG[0].owner === AXIS); }
+// a headquarters can only be hurt once the enemy holds every other capture point on the map (homeland included)
+function hqLeft(team) { return POINTS.filter(p => p.owner !== 1 - team).length; }
+function hqOpen(team) { return hqLeft(team) === 0; }
 function allyOwned() { return POINTS.filter(p => p.owner === ALLY).length; }
 // a random spot on dry land (or in deep water) between r0 and r1 from a centre, preferring the side given by bv
 function landSpot(cx, cz, r0, r1, bv) {
@@ -406,7 +407,8 @@ function moveLand(u, dt) {
   }
   u.yaw += u.turnIn * d.turn * dt;
   const here = terrainH(u.pos.x, u.pos.z), wet = here < World.water;
-  const want = u.throttle * d.speed * (u.throttle < 0 ? 0.5 : 1) * (wet ? 0.45 : 1);
+  u.cover = forestAt(u.pos.x, u.pos.z);         // woods and mountains are slow going
+  const want = u.throttle * d.speed * (u.throttle < 0 ? 0.5 : 1) * (wet ? 0.45 : 1) * (1 - 0.35 * Math.min(1, u.cover)) * (1 - 0.45 * roughAt(u.pos.x, u.pos.z));
   u.speed += (want - u.speed) * Math.min(1, dt * 3);
   const nx = clamp(u.pos.x + Math.sin(u.yaw) * u.speed * dt, -MAP.x, MAP.x), nz = clamp(u.pos.z + Math.cos(u.yaw) * u.speed * dt, -MAP.z, MAP.z);
   const nh = terrainH(nx, nz);
@@ -451,7 +453,8 @@ function addProj(kind, o, vel, owner, dmg, splash, life) {
   projs.push(p); return p;
 }
 // stealth (lowObs) aircraft can only be spotted, locked and shot at from much closer in
-function spotR(e, r) { return e.def.lowObs ? r * 0.4 : r; }
+// how close an enemy has to be before it is spotted: stealth, and ground forces hidden in the woods, need a closer look
+function spotR(e, r) { return (e.def.lowObs ? r * 0.4 : r) * (e.cover > 0.35 ? 0.6 : 1); }
 // ---- homing air-to-air missiles (Modern Era fighters)
 // the enemy aircraft closest to a direction, within a cone of maxAng radians and the missile's range
 function airLock(team, from, dir, maxAng, range) {
@@ -633,10 +636,11 @@ function bountyOf(d) { return d.model === 'hq' ? 2000 : Math.round(Math.max(40, 
 function damage(u, amt, att, pl) {
   if (u.dead) return;
   if (u.def.model === 'hq' && !hqOpen(u.team)) {
-    if (pl && time - hqMsgT > 8) { hqMsgT = time; msg(`The ${TEAM_NAME[u.team]} headquarters is out of reach. Take a point in the ${SECTORS[u.team === ALLY ? 0 : COLS - 1]} sector first.`, 'bad'); }
+    if (pl && time - hqMsgT > 8) { hqMsgT = time; { const n = hqLeft(u.team); msg(`The ${TEAM_NAME[u.team]} headquarters is out of reach until every other point is taken (${n} still to go).`, 'bad'); } }
     return;
   }
   if (!pl) amt *= 0.45;            // AI gunnery is weaker than the player's: keeps the war from burning out
+  if (u.cover > 0.35) amt *= 0.75; // the trees soak up some of it
   u.hp -= amt;
   if (u === player) hurtFlash = 0.25;
   if (u.def.domain === 'sea' && u !== player && !u.rolled && u.hp < u.maxHp * 0.25) {
@@ -793,10 +797,13 @@ function patrolPoint(u) {
   if (d.role === 'torpedo') { const f = frontPos(SEA_LANE); return V().set(cx(f.x + rnd(-900, 900)), 100, cz(f.z + rnd(-700, 700))); }
   const lane = Math.floor(Math.random() * LANES);
   if (d.role === 'bomber') { const sp = stage(u.team, lane); return V().set(sp.x + rnd(-300, 300), 190, sp.z + rnd(-300, 300)); }
-  const f = frontPos(lane); return V().set(cx(f.x + rnd(-700, 700)), rnd(110, 200), cz(f.z + rnd(-600, 600)));
+  const f = frontPos(lane), x = cx(f.x + rnd(-700, 700)), z = cz(f.z + rnd(-600, 600));
+  return V().set(x, ground(x, z) + rnd(110, 200), z);
 }
 function aiAir(u, dt) {
-  const d = u.def, t = u.target, g = T1, gr = ground(u.pos.x, u.pos.z);
+  const d = u.def, t = u.target, g = T1, sy = Math.sin(u.yaw), cy = Math.cos(u.yaw);
+  // look ahead along the flight path too, so the computer's pilots climb over mountains instead of into them
+  const gr = Math.max(ground(u.pos.x, u.pos.z), ground(u.pos.x + sy * 160, u.pos.z + cy * 160), ground(u.pos.x + sy * 360, u.pos.z + cy * 360));
   if (d.role === 'cargo') {            // supply run: airport <-> far rear depot
     if (!u.route) {
       const ap = AIRPORT[u.team], dp = HOME[u.team].airDepot;
@@ -1362,6 +1369,16 @@ function renderMenu() {
     b.disabled = mode !== 'menu' && k !== TH.id; if (b.disabled) b.title = 'End the operation first';
     b.onclick = () => { if (k !== TH.id && mode === 'menu') switchTheatre(k); }; ft.append(b);
   }
+  for (const m of loadMaps()) {               // maps built in the map builder
+    const k = 'map-' + m.id, b = document.createElement('button'); b.className = 'tab' + (k === TH.id ? ' on' : '');
+    b.innerHTML = '<span></span><small></small>'; b.firstChild.textContent = m.name; b.querySelector('small').textContent = 'Custom · ' + THEATRES[m.base].title;
+    b.disabled = mode !== 'menu' && k !== TH.id; if (b.disabled) b.title = 'End the operation first';
+    b.onclick = () => { if (k !== TH.id && mode === 'menu') switchTheatre(k); }; ft.append(b);
+  }
+  if (mode === 'menu') {
+    const b = document.createElement('button'); b.className = 'tab builder'; b.innerHTML = '✎ Map Builder<small>Make your own battlefield</small>';
+    b.onclick = () => { location.href = 'editor.html' + (TH.custom ? '?map=' + TH.custom.id : ''); }; ft.append(b);
+  }
   $('acct').innerHTML = `<b>${a.credits.toLocaleString()}</b> credits` + (mode !== 'menu' ? ` <i>+${stats.credits.toLocaleString()} this battle</i>` : '') + `<small>${a.battles} battles · ${a.wins} won · ${a.kills} kills · ${a.campaigns} campaigns won</small>`;
   const sec = secPoints(selCol), held = sec.filter(p => p.owner === ALLY).length;
   $('sectorInfo').innerHTML = isLanding(selCol) ? `Landing on <b>${SECTORS[selCol]}</b> · ground forces make an amphibious assault on its beach; ships and aircraft join the battle offshore`
@@ -1518,8 +1535,8 @@ function mapBg() {
   if (mapBgCv) return mapBgCv;
   const w = 1400, h = 750; mapBgCv = document.createElement('canvas'); mapBgCv.width = w; mapBgCv.height = h; const b = mapBgCv.getContext('2d');
   for (let y = 0; y < h; y += 2) for (let x = 0; x < w; x += 2) {
-    const t = terrainH((x / w * 2 - 1) * MAP.x, (y / h * 2 - 1) * MAP.z);
-    b.fillStyle = t > 9 ? '#4f6b3c' : t > 0.5 ? '#46663a' : t > -3 ? '#8a8560' : t > -14 ? '#1c4a66' : '#17405a'; b.fillRect(x, y, 2, 2);
+    const wx = (x / w * 2 - 1) * MAP.x, wz = (y / h * 2 - 1) * MAP.z, t = terrainH(wx, wz);
+    b.fillStyle = t > 94 ? '#dcdcd6' : t > 34 ? '#7d735f' : t > 0.5 && forestAt(wx, wz) > 0.3 ? '#2f4c29' : t > 9 ? '#4f6b3c' : t > 0.5 ? '#46663a' : t > -3 ? '#8a8560' : t > -14 ? '#1c4a66' : '#17405a'; b.fillRect(x, y, 2, 2);
   }
   return mapBgCv;
 }
@@ -1585,9 +1602,34 @@ function drawEuBg(w, h) {
   const gs = TH.grid;
   for (let lon = Math.ceil(GEO.lon0 / gs[0]) * gs[0]; lon < GEO.lon1; lon += gs[0]) { const q = euXY(lon, 0, w, h); c.beginPath(); c.moveTo(q[0], 0); c.lineTo(q[0], h); c.stroke(); }
   for (let lat = Math.ceil(GEO.lat0 / gs[1]) * gs[1]; lat < GEO.lat1; lat += gs[1]) { const q = euXY(0, lat, w, h); c.beginPath(); c.moveTo(0, q[1]); c.lineTo(w, q[1]); c.stroke(); }
-  const land = () => { for (const poly of LAND) { c.beginPath(); poly.forEach((q, i) => { const r = euXY(q[0], q[1], w, h); c[i ? 'lineTo' : 'moveTo'](r[0], r[1]); }); c.closePath(); c.fill(); c.stroke(); } };
-  c.lineJoin = 'round'; c.fillStyle = 'rgba(120,170,190,.25)'; c.strokeStyle = 'rgba(120,170,190,.25)'; c.lineWidth = 9; land();   // shallows
-  c.fillStyle = '#4b6a3d'; c.strokeStyle = '#c9c08f'; c.lineWidth = 1.5; land();
+  // the land (outlines plus any land / water stamps) as a mask, then shallows, the beach line and the land on top
+  const mask = document.createElement('canvas'); mask.width = w; mask.height = h;
+  paintLand(mask.getContext('2d'), LAND, TERRAIN, (lon, lat) => euXY(lon, lat, w, h), w / (2 * MAP.x), '#000');
+  const layer = (col, grow) => {
+    const L = document.createElement('canvas'); L.width = w; L.height = h; const lc = L.getContext('2d');
+    for (let a = 0; a < 8 && grow; a++) lc.drawImage(mask, Math.cos(a * 0.785) * grow, Math.sin(a * 0.785) * grow);
+    lc.drawImage(mask, 0, 0); lc.globalCompositeOperation = 'source-in'; lc.fillStyle = col; lc.fillRect(0, 0, w, h); return L;
+  };
+  c.globalAlpha = 0.25; c.drawImage(layer('rgb(120,170,190)', 4.5), 0, 0); c.globalAlpha = 1;   // shallows
+  c.drawImage(layer('#c9c08f', 1.2), 0, 0); c.drawImage(layer('#4b6a3d', 0), 0, 0);
+  // relief and woods, shaded from the real terrain heights
+  if (TERRAIN.some(s => s[0] === 'mtn' || s[0] === 'hill' || s[0] === 'forest')) {
+    const rw = 560, rh = 300, hs = new Float32Array(rw * rh), rc = document.createElement('canvas'); rc.width = rw; rc.height = rh;
+    const X = i => ((i + 0.5) / rw * 2 - 1) * MAP.x, Z = j => ((j + 0.5) / rh * 2 - 1) * MAP.z;
+    for (let j = 0; j < rh; j++) for (let i = 0; i < rw; i++) hs[j * rw + i] = terrainH(X(i), Z(j));
+    const im = rc.getContext('2d').createImageData(rw, rh), px = im.data;
+    for (let j = 1; j < rh - 1; j++) for (let i = 1; i < rw - 1; i++) {
+      const k = j * rw + i, t = hs[k]; if (t < 0.8) continue;
+      const fo = forestAt(X(i), Z(j)), shade = clamp((hs[k - 1] - hs[k + 1] + hs[k - rw] - hs[k + rw]) * 0.025, -0.6, 0.6);
+      let r = 75, g = 106, b = 61, a = 0;
+      if (fo > 0.15) { r = 38; g = 70; b = 36; a = Math.min(1, fo * 1.5) * 0.85; }
+      if (t > 28) { const q = Math.min(1, (t - 28) / 34); r += (128 - r) * q; g += (114 - g) * q; b += (88 - b) * q; a = Math.max(a, q * 0.9); }
+      if (t > 94) { const q = Math.min(1, (t - 94) / 12); r += (236 - r) * q; g += (236 - g) * q; b += (232 - b) * q; }
+      if (Math.abs(shade) > 0.02) { a = Math.max(a, Math.min(0.9, Math.abs(shade) * 1.4)); const s = shade > 0 ? 255 : 0, q = Math.abs(shade) * 0.6; r += (s - r) * q; g += (s - g) * q; b += (s - b) * q; }
+      const o = k * 4; px[o] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = a * 255;
+    }
+    rc.getContext('2d').putImageData(im, 0, 0); c.drawImage(rc, 0, 0, w, h);
+  }
   const R = rng32(1944);
   for (let i = 0; i < 2600; i++) { c.fillStyle = R() < 0.5 ? 'rgba(0,0,0,.05)' : 'rgba(255,255,220,.04)'; c.fillRect(R() * w, R() * h, 2 + R() * 3, 2 + R() * 3); }
   c.textAlign = 'center';

@@ -82,6 +82,7 @@
   #frontTabs { margin:12px 0 0; }
   #frontTabs .tab { text-transform:none; letter-spacing:.02em; font-size:13px; padding:8px 14px; text-align:left; }
   #frontTabs .tab small { display:block; font-weight:400; font-size:11px; opacity:.8; }
+  #frontTabs .tab.builder { border-style:dashed; color:var(--amber); }
   .help { margin-top:18px; font-size:12.5px; color:#cfcab4; line-height:1.9; }
   .shophead { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:8px; }
   #shopMoney { font-size:24px; font-weight:800; color:var(--amber); }
@@ -234,6 +235,7 @@
     <div class="row" id="menuBtns"></div>
     <div class="help">
       <span id="helpCampaign"></span>
+      <b>Terrain.</b> Mountains and hills slow ground vehicles and stop shells; aircraft have to climb over them. Forests slow ground forces too, but hide them from the enemy and soak up a quarter of the damage they take. Build your own battlefield in the <b>Map Builder</b>.<br>
       <b>Battles.</b> Each battle lasts twelve minutes and picks up where the last one left off. Kills and captures earn credits, paid out when the battle ends. Spend them in the Armory on permanent unlock tiers. The enemy fields whatever tiers you have unlocked.<br>
       <div class="th">Left thumb: drag to drive (planes: up/down is throttle, they fly where you aim). Right thumb: drag anywhere to aim, or hold <kbd>Fire</kbd> and drag to aim while shooting.<br>
       <kbd>Zoom</kbd> locks onto the nearest enemy &nbsp;·&nbsp; <kbd>Shop</kbd> buys escorts and buildings &nbsp;·&nbsp; <kbd>Map</kbd> opens this map &nbsp;·&nbsp; <kbd>Swap</kbd> takes over another friendly vehicle. Landscape plays best.</div>
@@ -266,6 +268,7 @@
 </div>
 
 <script src="js/vendor/three.min.js"></script>
+<script src="js/mapdraw.js"></script>
 <script src="js/theatres.js"></script>
 <script src="js/defs.js"></script>
 <script src="js/account.js"></script>

@@ -53,6 +53,35 @@ const EU_THEATRE = {
     [[11, 55.7], [12.5, 55.6], [12.6, 56.1], [11.6, 55.95]],
     [[12.8, 56], [12.9, 55.4], [14.2, 55.4], [14.4, 56], [16.5, 57], [16, 60], [11.3, 59], [11.8, 57.6]]
   ],
+  // mountains, hills, forests and lakes (see mapdraw.js)
+  terrain: [
+    ...stampLine('mtn', [[-5.4, 57.4], [-4.4, 57.1], [-3.4, 56.9], [-4.6, 56.5]], 300, 3),        // Scottish Highlands
+    ...stampLine('hill', [[-2.3, 55.0], [-2.0, 54.2], [-1.9, 53.3]], 260, 3),                    // the Pennines
+    ...stampLine('mtn', [[-3.95, 53.05], [-3.7, 52.4]], 210, 3),                                 // Snowdonia
+    ...stampLine('forest', [[-1.15, 53.3], [-1.05, 53.05]], 170, 2),                             // Sherwood Forest
+    ...stampLine('forest', [[-2.4, 48.05], [-1.9, 47.95]], 220, 2),                              // Broceliande
+    ...stampLine('hill', [[-0.9, 48.75], [-0.2, 48.55]], 260, 2),                                // the Normandy bocage
+    ...stampLine('forest', [[-0.9, 48.75], [-0.2, 48.55]], 200, 3),
+    ...stampLine('forest', [[1.9, 47.95], [2.7, 48.35]], 220, 3),                                // Orleans and Fontainebleau
+    ...stampLine('hill', [[3.8, 47.4], [4.2, 46.9]], 260, 2),                                    // the Morvan
+    ...stampLine('hill', [[4.6, 49.85], [5.6, 50.05], [6.4, 50.35]], 330, 3),                    // the Ardennes
+    ...stampLine('forest', [[4.6, 49.85], [5.6, 50.05], [6.4, 50.35]], 330, 4),
+    ...stampLine('hill', [[6.5, 50.45], [7.0, 50.15]], 240, 2),                                  // the Eifel
+    ...stampLine('mtn', [[6.95, 47.85], [7.2, 48.85]], 240, 3),                                  // the Vosges
+    ...stampLine('mtn', [[8.05, 47.75], [8.35, 48.75]], 220, 3),                                 // the Black Forest
+    ...stampLine('forest', [[8.05, 47.75], [8.35, 48.75]], 300, 4),
+    ...stampLine('forest', [[8.2, 52.15], [9.0, 51.8]], 200, 3),                                 // Teutoburg Forest
+    ...stampLine('forest', [[9.7, 53.25], [10.4, 53.0]], 230, 2),                                // Luneburg Heath
+    ['mtn', 10.65, 51.78, 220], ...stampLine('forest', [[10.3, 51.8], [11.0, 51.7]], 230, 2),     // the Harz
+    ...stampLine('hill', [[10.1, 50.7], [11.5, 50.45]], 260, 3),                                 // Thuringian Forest
+    ...stampLine('forest', [[10.1, 50.7], [11.5, 50.45]], 240, 3),
+    ...stampLine('hill', [[12.4, 49.4], [13.8, 48.8]], 320, 3),                                  // Bavarian Forest
+    ...stampLine('forest', [[12.4, 49.4], [13.8, 48.8]], 300, 3),
+    ...stampLine('mtn', [[5.9, 46.6], [7.5, 46.75], [9.5, 46.85], [11.5, 47.0], [13.5, 46.9], [15.5, 47.1]], 430, 3),   // the Alps
+    ...stampLine('hill', [[14.0, 50.7], [16.5, 50.5]], 280, 3),                                  // the Ore and Sudeten mountains
+    ['water', 5.25, 52.8, 200], ['water', 5.45, 52.55, 150], ['water', 5.05, 52.6, 120],          // the IJsselmeer
+    ['water', 9.3, 47.62, 120], ['water', 12.7, 53.45, 100]                                      // Lake Constance, the Muritz
+  ],
   // seven sectors along the coast from Brittany to Germany
   sectors: ['Brest', 'Cherbourg', 'Caen', 'Rouen', 'Calais', 'Antwerp', 'Bremen'],
   laneTags: [' Heights', '', ' Roads'],
@@ -79,7 +108,7 @@ const EU_THEATRE = {
     goal: 'The Allies are hanging on by their fingernails: only Brittany is left on the Continent and the Axis are ashore at Dover. Push the front line east, sector by sector, until the Axis headquarters in Berlin falls. Click a sector on the map, then choose a vehicle.',
     advance: 'The front line moves east', retreat: 'The Axis push the front line west'
   },
-  help: '<b>The campaign.</b> Seven sectors along the Channel and North Sea coast lie between your headquarters in England and theirs in Berlin, each with two points on land and one at sea. It is 1940 and the Allies are nearly beaten: only Brest is still in Allied hands and the Axis have a foothold at Dover. Destroy a point\'s command post, then hold the ground with tanks and infantry (or the water with warships) to capture it. Points fall in order, so the front line moves one step at a time. A headquarters can only be attacked once its home sector is breached. England has three points of its own (Dover, London, Southampton): while the Axis hold Calais they ferry troops across to Dover, and if all three fall the Allied headquarters is open.<br>',
+  help: '<b>The campaign.</b> Seven sectors along the Channel and North Sea coast lie between your headquarters in England and theirs in Berlin, each with two points on land and one at sea. It is 1940 and the Allies are nearly beaten: only Brest is still in Allied hands and the Axis have a foothold at Dover. Destroy a point\'s command post, then hold the ground with tanks and infantry (or the water with warships) to capture it. Points fall in order, so the front line moves one step at a time. A headquarters can only be attacked once its side has lost every other point on the map. England has three points of its own (Dover, London, Southampton): while the Axis hold Calais they ferry troops across to Dover.<br>',
   names: {}
 };
 
@@ -146,6 +175,17 @@ const PAC_THEATRE = {
     // the seven battle islands
     ...PAC_ISLANDS.map((s, i) => islandBlob(s.c, s.rx, s.ry, s.rot, 21 + i * 4))
   ],
+  terrain: [
+    ...stampLine('mtn', [[199.8, 19.3], [201.0, 18.8]], 230, 2), ...stampLine('forest', [[203.2, 24.4], [205.6, 23.9]], 260, 3),   // Hawaii
+    ...stampLine('mtn', [[137.6, 36.5], [137.8, 35.7]], 170, 3), ['mtn', 138.73, 35.36, 130], ...stampLine('forest', [[139.6, 37.6], [140.6, 38.8]], 220, 3),  // Japan
+    ...stampLine('hill', [[131.0, 33.2], [131.2, 32.0]], 160, 2), ...stampLine('hill', [[128.4, 38.0], [128.9, 36.0]], 170, 3),
+    ...stampLine('mtn', [[121.1, 24.6], [120.9, 22.8]], 120, 3), ...stampLine('mtn', [[121.0, 17.9], [121.1, 16.3]], 130, 3),   // Taiwan, Luzon
+    ...stampLine('forest', [[122.2, 13.6], [124.0, 13.1]], 180, 2), ...stampLine('forest', [[124.5, 7.6], [125.8, 8.6]], 200, 2),
+    ...stampLine('mtn', [[137.5, -3.6], [141.5, -4.6], [145.0, -5.8]], 230, 3), ...stampLine('forest', [[133, -2.2], [138, -2.6], [142, -3.6], [146.5, -7.0]], 300, 3),   // New Guinea
+    // the battle islands: jungle around the beaches, a peak at the far end
+    ...PAC_ISLANDS.map(s => ['forest', s.c[0], s.c[1], 260]),
+    ...PAC_ISLANDS.map(s => ['hill', +(s.c[0] - Math.cos(s.rot) * s.rx * 0.95).toFixed(2), +(s.c[1] - Math.sin(s.rot) * s.rx * 0.95).toFixed(2), 150])
+  ],
   sectors: PAC_ISLANDS.map(s => s.name),
   laneTags: [' Airfield', ' Beach', ' Waters'],
   pointNames: PAC_ISLANDS.map(s => s.pts),
@@ -166,7 +206,7 @@ const PAC_THEATRE = {
     goal: 'Pearl Harbor is burning, Japan holds every island west of Midway and its troops are ashore on Hawaii. Take the Pacific back island by island, from Midway to Okinawa, until the headquarters in Tokyo falls. Click a sector on the map, then choose a vehicle.',
     advance: 'Another island taken. On toward Japan', retreat: 'Japan pushes us back toward Hawaii'
   },
-  help: '<b>The campaign.</b> Seven island battlegrounds lie between Pearl Harbor and Tokyo, each with two points ashore and one at sea. It is December 1941 and the Allies are nearly beaten: only Midway still holds and Japanese troops have landed on Hawaii. Ground forces cannot drive from island to island: pick the next island on the map to make an amphibious landing on its beach (landing ships and paratroopers go in the same way). Destroy a point\'s command post, then hold the ground (or the water with warships) to capture it. A headquarters can only be attacked once its home sector is breached. Hawaii has three points of its own (Haleiwa, Honolulu, Hickam Field): while Japan holds Wake its landing craft come ashore at Haleiwa, and if all three fall Pearl Harbor is open.<br>',
+  help: '<b>The campaign.</b> Seven island battlegrounds lie between Pearl Harbor and Tokyo, each with two points ashore and one at sea. It is December 1941 and the Allies are nearly beaten: only Midway still holds and Japanese troops have landed on Hawaii. Ground forces cannot drive from island to island: pick the next island on the map to make an amphibious landing on its beach (landing ships and paratroopers go in the same way). Destroy a point\'s command post, then hold the ground (or the water with warships) to capture it. A headquarters can only be attacked once its side has lost every other point on the map. Hawaii has three points of its own (Haleiwa, Honolulu, Hickam Field): while Japan holds Wake its landing craft come ashore at Haleiwa.<br>',
   names: {
     spitfire: 'F4F Wildcat', mustang: 'F6F Hellcat', troops: 'Marine Rifle Squad',
     bf109: 'A6M Zero', fw190: 'Ki-84 Hayate', bf110: 'Ki-45 Toryu', fi167: 'B5N Kate', fa223: 'Ka-1 Autogyro', ju88: 'G4M Betty', he111: 'G8N Renzan',
@@ -222,6 +262,20 @@ const MOD_THEATRE = {
     // the battle islands
     ...MOD_ISLANDS.filter(s => s.c).map((s, i) => islandBlob(s.c, s.rx, s.ry, s.rot, 41 + i * 4))
   ],
+  terrain: [
+    ...stampLine('hill', [[147.0, 13.9], [147.8, 13.6]], 200, 2), ...stampLine('forest', [[144.3, 14.6], [145.0, 13.9]], 240, 2),   // Guam
+    ...stampLine('mtn', [[113.6, 35.8], [114.2, 37.4], [114.8, 39.2]], 260, 3),     // the Taihang Mountains
+    ...stampLine('mtn', [[115.2, 41.3], [117.0, 41.2], [118.8, 41.0]], 220, 3),     // the Yan Mountains, north of Beijing
+    ...stampLine('hill', [[116.6, 36.3], [117.8, 36.1]], 200, 2),                   // Mount Tai
+    ...stampLine('mtn', [[104.5, 33.8], [108.5, 34.0], [111.0, 33.6]], 300, 3),     // the Qinling
+    ...stampLine('mtn', [[110.5, 25.2], [113.5, 25.0], [116.0, 24.6]], 240, 3), ...stampLine('hill', [[116.8, 26.5], [118.0, 28.0]], 240, 2),   // Nanling, Wuyi
+    ...stampLine('forest', [[106.0, 26.0], [110.0, 27.5], [114.0, 28.5]], 380, 3), ...stampLine('forest', [[102.0, 22.5], [105.0, 22.0]], 320, 2),
+    ...stampLine('mtn', [[105.4, 19.4], [107.2, 16.4], [108.2, 14.2]], 200, 3), ...stampLine('forest', [[104.8, 18.2], [107.0, 14.5]], 260, 3),   // the Annamite range
+    ...stampLine('hill', [[127.8, 40.3], [128.6, 38.4], [129.0, 36.4]], 200, 3),    // Korea's eastern ridge
+    ...stampLine('mtn', [[137.6, 36.5], [137.8, 35.7]], 160, 3), ['mtn', 138.73, 35.36, 120],   // the Japanese Alps and Fuji
+    ...stampLine('mtn', [[121.0, 17.9], [121.1, 16.3]], 130, 3),                    // Luzon
+    ...MOD_ISLANDS.filter(s => s.c).map(s => ['forest', s.c[0], s.c[1], 200])
+  ],
   sectors: MOD_ISLANDS.map(s => s.name),
   laneTags: [' Base', ' Beach', ' Waters'],
   pointNames: MOD_ISLANDS.map(s => s.pts),
@@ -243,7 +297,7 @@ const MOD_THEATRE = {
     goal: 'China has struck first: it holds every island from Okinawa to Taiwan and its marines are ashore on Guam. Fight back island by island, from Okinotori Reef to Taiwan, then land on the Chinese coast and drive on to the headquarters in Beijing. Click a sector on the map, then choose a vehicle.',
     advance: 'Another sector taken. On toward Beijing', retreat: 'China pushes us back toward Guam'
   },
-  help: '<b>The campaign.</b> Seven battlegrounds lie between Guam and Beijing, each with two points ashore and one at sea: five islands, then Qingdao and Tianjin on the Chinese coast. China has struck first and the Americans are nearly beaten: only Okinotori Reef still holds and Chinese marines have landed on Guam. Ground forces cannot drive from island to island: pick the next sector on the map to make an amphibious landing on its beach (landing ships and paratroopers go in the same way). Destroy a point\'s command post, then hold the ground (or the water with warships) to capture it. A headquarters can only be attacked once its home sector is breached. Guam has three points of its own (Apra Harbor, Hagåtña, Andersen AFB): while China holds Okinawa its landing ships come ashore at Apra Harbor, and if all three fall the US headquarters is open.<br>',
+  help: '<b>The campaign.</b> Seven battlegrounds lie between Guam and Beijing, each with two points ashore and one at sea: five islands, then Qingdao and Tianjin on the Chinese coast. China has struck first and the Americans are nearly beaten: only Okinotori Reef still holds and Chinese marines have landed on Guam. Ground forces cannot drive from island to island: pick the next sector on the map to make an amphibious landing on its beach (landing ships and paratroopers go in the same way). Destroy a point\'s command post, then hold the ground (or the water with warships) to capture it. A headquarters can only be attacked once its side has lost every other point on the map. Guam has three points of its own (Apra Harbor, Hagåtña, Andersen AFB): while China holds Okinawa its landing ships come ashore at Apra Harbor.<br>',
   names: {
     c47: 'C-130 Hercules', spitfire: 'F-16 Fighting Falcon', mustang: 'F/A-18 Super Hornet', avenger: 'P-8 Poseidon', r4: 'AH-64 Apache', p38: 'F-35 Lightning II',
     b25: 'A-10 Warthog', b17: 'B-1B Lancer', b24: 'B-2 Spirit', b52: 'B-52 Stratofortress', c54: 'C-17 Globemaster',
@@ -359,15 +413,49 @@ const MOD_THEATRE = {
 };
 
 const THEATRES = { eu: EU_THEATRE, pac: PAC_THEATRE, mod: MOD_THEATRE };
-let THEATRE_ID = 'eu';
+
+// ---------------------------------------------------------------- custom maps (built in editor.html)
+// A custom map starts as a copy of one of the theatres above (its units, seasons and sides) with its own coastline,
+// terrain, capture points, headquarters and sector names. They are kept in localStorage and played as 'map-<id>'.
+const MAPS_KEY = 'frontline1944.maps';
+function loadMaps() { try { const m = JSON.parse(localStorage.getItem(MAPS_KEY)); return Array.isArray(m) ? m.filter(x => x && x.id && THEATRES[x.base]) : []; } catch (e) { return []; } }
+function saveMaps(list) { localStorage.setItem(MAPS_KEY, JSON.stringify(list)); }
+function sideAdj(B, t) { return (B.sides ? B.sides.adj : ['Allied', 'Axis'])[t]; }
+// a new map record from a theatre: its markers and terrain are copied so the map stands on its own.
+// start: 'coast' keeps the real coastline, 'sea' starts with open water, 'land' with solid ground
+function newMapFrom(baseId, name, start) {
+  const B = THEATRES[baseId], cp = v => JSON.parse(JSON.stringify(v)), g = B.box;
+  const m = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), name: name || 'New map', base: baseId, v: 1,
+    coast: start === 'coast', stamps: start === 'coast' ? cp(B.terrain || []) : [],
+    lanes: cp(B.lanes), homeNodes: cp(B.homeland.nodes), homeName: B.homeland.name, homeNames: cp(B.homeland.names),
+    hq: cp(B.base), airport: cp(B.airport), home: cp(B.home), sectors: cp(B.sectors),
+    pointNames: B.sectors.map((n, c) => [0, 1, 2].map(l => (B.pointNames && B.pointNames[c][l]) || n + B.laneTags[l])) };
+  if (start === 'land') m.stamps.push(['land', (g.lon0 + g.lon1) / 2, (g.lat0 + g.lat1) / 2, 20000]);
+  return m;
+}
+function customTheatre(m) {
+  const B = THEATRES[m.base];
+  return Object.assign({}, B, {
+    id: 'map-' + m.id, baseId: B.id, custom: m, title: m.name, blurb: 'Custom map · ' + B.title,
+    land: m.coast ? B.land : [], terrain: m.stamps || [], labels: m.coast ? B.labels : [],
+    lanes: m.lanes, homeland: { name: m.homeName || B.homeland.name, names: m.homeNames || B.homeland.names, nodes: m.homeNodes },
+    base: m.hq, airport: m.airport, home: m.home, sectors: m.sectors, pointNames: m.pointNames,
+    hqLabels: [sideAdj(B, 0) + ' HQ', sideAdj(B, 1) + ' HQ'],
+    str: { goal: `${m.name}: a custom battlefield. Push the front line sector by sector until the enemy headquarters falls. Click a sector on the map, then choose a vehicle.`,
+      advance: 'The front line moves forward', retreat: 'The enemy pushes the front line back' }
+  });
+}
+let THEATRE_ID = 'eu', CUSTOM_MAP = null;
 try {
   const q = new URLSearchParams(location.search).get('front'), s = q || localStorage.getItem(FRONT_KEY);
-  if (s && THEATRES[s]) THEATRE_ID = s;
-  if (q && THEATRES[q]) localStorage.setItem(FRONT_KEY, q);
+  if (s && s.startsWith('map-')) CUSTOM_MAP = loadMaps().find(m => 'map-' + m.id === s) || null;
+  if (CUSTOM_MAP) THEATRE_ID = CUSTOM_MAP.base;
+  else if (s && THEATRES[s]) THEATRE_ID = s;
+  if (q && (THEATRES[q] || CUSTOM_MAP)) localStorage.setItem(FRONT_KEY, q);
 } catch (e) { }
-const TH = THEATRES[THEATRE_ID];
+const TH = CUSTOM_MAP ? customTheatre(CUSTOM_MAP) : THEATRES[THEATRE_ID];
 function switchTheatre(id) {
-  if (!THEATRES[id]) return;
+  if (!THEATRES[id] && !(id.startsWith('map-') && loadMaps().some(m => 'map-' + m.id === id))) return;
   try { localStorage.setItem(FRONT_KEY, id); } catch (e) { }
   const q = new URLSearchParams(location.search); q.delete('front'); q.set('front', id);
   location.replace(location.pathname + '?' + q.toString());

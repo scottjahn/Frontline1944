@@ -5,7 +5,7 @@ const TEAM_NAME = SIDES.adj, SIDE_PL = SIDES.pl;          // 'Allied' / 'the All
 const TEAM_COL = [0x3a78ff, 0xd83030];
 // The battlefield is the theatre's map box seen from above: x runs west to east, z north to south.
 const MAP = { x: 7000, z: 3750 };
-const GEO = TH.box, LAND = TH.land, FACE = TH.face, INVADE = TH.invade, HOME_NAME = TH.homeland.name;
+const GEO = TH.box, LAND = TH.land, TERRAIN = TH.terrain || [], FACE = TH.face, INVADE = TH.invade, HOME_NAME = TH.homeland.name;
 // longitude / latitude -> battlefield coordinates
 function LL(lon, lat) { return { x: Math.round(((lon - GEO.lon0) / (GEO.lon1 - GEO.lon0) * 2 - 1) * MAP.x), z: Math.round(((GEO.lat1 - lat) / (GEO.lat1 - GEO.lat0) * 2 - 1) * MAP.z) }; }
 const LLq = q => LL(q[0], q[1]);

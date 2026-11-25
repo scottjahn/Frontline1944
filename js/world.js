@@ -4,12 +4,10 @@
 // how far each spot is from the coast (+ inland, - out to sea). The terrain, the AI's route-finding and
 // all "is this land or water" questions read from it.
 const SDF = { w: 1400, h: 750, cell: 10, d: null };
+function sdfPx(lon, lat) { const p = LL(lon, lat); return [(p.x + MAP.x) / SDF.cell, (p.z + MAP.z) / SDF.cell]; }
 (function buildSDF() {
   const w = SDF.w, h = SDF.h, cv = document.createElement('canvas'); cv.width = w; cv.height = h; const c = cv.getContext('2d');
-  c.fillStyle = '#fff';
-  for (const poly of LAND) {
-    c.beginPath(); poly.forEach((q, i) => { const p = LL(q[0], q[1]); c[i ? 'lineTo' : 'moveTo']((p.x + MAP.x) / SDF.cell, (p.z + MAP.z) / SDF.cell); }); c.closePath(); c.fill();
-  }
+  paintLand(c, LAND, TERRAIN, sdfPx, 1 / SDF.cell, '#fff');
   const img = c.getImageData(0, 0, w, h).data, n = w * h, BIG = 1e6;
   const dl = new Float32Array(n), dw = new Float32Array(n);      // distance to the nearest land / nearest water
   for (let i = 0; i < n; i++) { const land = img[i * 4 + 3] > 127; dl[i] = land ? 0 : BIG; dw[i] = land ? BIG : 0; }
@@ -35,12 +33,14 @@ const SDF = { w: 1400, h: 750, cell: 10, d: null };
   }
   SDF.d = sd;
 })();
-// distance from the coast at a battlefield position: > 0 inland, < 0 out to sea
-function sdf(x, z) {
+// a grid the size of the SDF, read smoothly at a battlefield position
+function fsamp(d, x, z) {
   const u = clamp((x + MAP.x) / SDF.cell - 0.5, 0, SDF.w - 1.001), v = clamp((z + MAP.z) / SDF.cell - 0.5, 0, SDF.h - 1.001);
-  const i = u | 0, j = v | 0, fu = u - i, fv = v - j, d = SDF.d, k = j * SDF.w + i;
+  const i = u | 0, j = v | 0, fu = u - i, fv = v - j, k = j * SDF.w + i;
   return (d[k] * (1 - fu) + d[k + 1] * fu) * (1 - fv) + (d[k + SDF.w] * (1 - fu) + d[k + SDF.w + 1] * fu) * fv;
 }
+// distance from the coast at a battlefield position: > 0 inland, < 0 out to sea
+function sdf(x, z) { return fsamp(SDF.d, x, z); }
 // unit vector pointing inland
 function sdGrad(x, z) { const gx = sdf(x + 30, z) - sdf(x - 30, z), gz = sdf(x, z + 30) - sdf(x, z - 30), l = Math.hypot(gx, gz) || 1; return [gx / l, gz / l]; }
 function terrainH(x, z) {
@@ -49,6 +49,8 @@ function terrainH(x, z) {
   const k = Math.min(d / 250, 1);
   let h = Math.min(d * 0.07, 7) + k * (Math.sin(x * 0.011) * Math.cos(z * 0.013) + 1) * 2.5
     + k * (Math.sin(x * 0.003 + 2) * Math.sin(z * 0.004) + 1) * 4;
+  const m = fsamp(FEAT.m, x, z), hl = fsamp(FEAT.hl, x, z);
+  if (m > 0.003 || hl > 0.003) h += Math.min(d / 160, 1) * reliefH(m, hl, x, z);     // mountains and hills rise from a little way inland
   for (const a of AIRPORT) {           // airfields are graded flat
     const o = Math.max(Math.abs(x - a.x) - 215, Math.abs(z - a.z) - 85);
     if (o < 90) { const f = o <= 0 ? 1 : 1 - o / 90; h = h + (13 - h) * f * f * (3 - 2 * f); }
@@ -71,6 +73,31 @@ for (const H of HOME) {                // each side's harbour: walk from inland 
   H.dock = { x: x - H.dockDir[0] * 6, z: z - H.dockDir[1] * 6 };
   H.port = { x: x + H.dockDir[0] * 280, z: z + H.dockDir[1] * 280 }; snapTo(H.port, -220);
 }
+// ---- mountains, hills and forest (TERRAIN stamps, see mapdraw.js), painted onto grids the size of the SDF:
+// FEAT.m mountains, FEAT.hl hills, FEAT.f forest, each 0..1. Capture points, headquarters and airfields are kept flat.
+function reliefSpots(px, k) {
+  const out = [], add = (p, r) => { const q = px(p); out.push([q[0], q[1], r[0] * k, r[1] * k]); };
+  for (const p of POINTS) if (!p.sea) add(p, RELIEF_CLEAR.point);
+  for (const b of BASE) add(b, RELIEF_CLEAR.hq);
+  for (const a of AIRPORT) add(a, RELIEF_CLEAR.airport);
+  for (const H of HOME) { add(H.depot, RELIEF_CLEAR.depot); add(H.dock, RELIEF_CLEAR.depot); }
+  return out;
+}
+const FEAT = (function () {
+  const w = SDF.w, h = SDF.h, n = w * h, k = 1 / SDF.cell, out = { m: new Float32Array(n), hl: new Float32Array(n), f: new Float32Array(n) };
+  if (!TERRAIN.some(s => s[0] === 'mtn' || s[0] === 'hill' || s[0] === 'forest')) return out;
+  const grid = paint => {
+    const cv = document.createElement('canvas'); cv.width = w; cv.height = h; const c = cv.getContext('2d');
+    c.fillStyle = '#000'; c.fillRect(0, 0, w, h); paint(c); return c.getImageData(0, 0, w, h).data;
+  };
+  const r = grid(c => { paintRelief(c, TERRAIN, sdfPx, k); maskRelief(c, reliefSpots(p => [(p.x + MAP.x) * k, (p.z + MAP.z) * k], k)); });
+  const f = grid(c => paintForest(c, TERRAIN, sdfPx, k));
+  for (let i = 0; i < n; i++) { out.m[i] = r[i * 4] / 255; out.hl[i] = r[i * 4 + 1] / 255; out.f[i] = SDF.d[i] > 30 ? f[i * 4] / 255 : 0; }
+  return out;
+})();
+// what the ground is like at a spot (0..1): forest cover, and how rough it is to drive over
+function forestAt(x, z) { return fsamp(FEAT.f, x, z); }
+function roughAt(x, z) { return Math.min(1, fsamp(FEAT.m, x, z) + fsamp(FEAT.hl, x, z) * 0.3); }
 
 // ---- route-finding: a coarse grid of land cells and of navigable water cells. A "field" for a destination tells
 // every cell which neighbour to step to next, so tanks go round bays and ships go round headlands.
@@ -96,6 +123,8 @@ const NAV = { c: 100, w: 2 * MAP.x / 100, h: 2 * MAP.z / 100, land: null, sea: n
 })();
 // which landmass a place is on (-1: open water, nowhere near land)
 function islandOf(x, z) { const c = navNear(navCell(x, z), NAV.land); return c < 0 ? -1 : NAV.isl[c]; }
+// a custom map can be one big landmass or a string of islands: if water breaks the coast road, land forces go by sea
+if (TH.custom) TH.islands = NODE[1].slice(1, COLS + 1).some((p, i, a) => i > 0 && islandOf(p.x, p.z) !== islandOf(a[i - 1].x, a[i - 1].z));
 function navCell(x, z) { return clamp(Math.floor((z + MAP.z) / NAV.c), 0, NAV.h - 1) * NAV.w + clamp(Math.floor((x + MAP.x) / NAV.c), 0, NAV.w - 1); }
 function navNear(c, pass) {             // the closest usable cell to c
   if (pass[c]) return c;
@@ -176,6 +205,12 @@ const World = {
       if (h < 0.8) { r = 0.76; g = 0.70; b = 0.50; if (h < -3) { r = 0.45; g = 0.5; b = 0.42; } }
       else if (h < 9) { r = 0.30 + v; g = 0.50 + v; b = 0.22; }
       else { r = 0.36 + v; g = 0.46 + v; b = 0.25; }
+      if (h > 0.8) {
+        const fo = Math.min(1, fsamp(FEAT.f, x, z) * 1.4), mt = fsamp(FEAT.m, x, z);
+        if (fo > 0) { r = lerp(r, 0.17, fo); g = lerp(g, 0.34, fo); b = lerp(b, 0.15, fo); }             // forest floor
+        if (h > 30 && mt > 0.15) { const q = Math.min(1, (h - 30) / 26) * Math.min(1, mt * 3); r = lerp(r, 0.47 + v, q); g = lerp(g, 0.43 + v, q); b = lerp(b, 0.36, q); }   // bare rock
+        if (h > 94) { const q = Math.min(1, (h - 94) / 12); r = lerp(r, 0.93, q); g = lerp(g, 0.94, q); b = lerp(b, 0.96, q); }    // snow on the peaks
+      }
       this.baseCol[i * 3] = r; this.baseCol[i * 3 + 1] = g; this.baseCol[i * 3 + 2] = b;
     }
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
@@ -192,12 +227,17 @@ const World = {
     // trees
     const tg = new THREE.ConeGeometry(3, 9, 6); tg.translate(0, 5.5, 0);
     this.treeMat = new THREE.MeshLambertMaterial({ color: s.tree });
-    const N = 7000; this.trees = new THREE.InstancedMesh(tg, this.treeMat, N);
+    const NS = 7000, NF = TERRAIN.some(s => s[0] === 'forest') ? 12000 : 0, N = NS + NF; this.trees = new THREE.InstancedMesh(tg, this.treeMat, N);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), sc = new THREE.Vector3(), ps = new THREE.Vector3();
     let c = 0, guard = 0;
-    while (c < N && guard++ < 150000) {
-      const x = rnd(-MAP.x - 300, MAP.x + 300), z = rnd(-MAP.z - 300, MAP.z + 300);
-      if (sdf(x, z) < 60) continue;
+    const woodStamps = TERRAIN.filter(s => s[0] === 'forest').map(s => { const p = LL(s[1], s[2]); return [p.x, p.z, s[3]]; });
+    while (c < N && guard++ < 400000) {
+      const woods = c >= NS || guard > 150000; if (woods && !NF) break;
+      let x, z;
+      if (woods) { const w = woodStamps[(Math.random() * woodStamps.length) | 0], a = rnd(0, 6.283), r = Math.sqrt(Math.random()) * w[2]; x = w[0] + Math.sin(a) * r; z = w[1] + Math.cos(a) * r; }
+      else { x = rnd(-MAP.x - 300, MAP.x + 300); z = rnd(-MAP.z - 300, MAP.z + 300); }
+      if (sdf(x, z) < 60 || fsamp(FEAT.m, x, z) > 0.55) continue;                 // none out at sea or above the tree line
+      if (woods) { const f = fsamp(FEAT.f, x, z); if (f < 0.2 || Math.random() > f * 1.3) continue; }   // the rest grow in the woods
       let ok = true;
       for (const b of BASE) if (Math.abs(x - b.x) < 260 && Math.abs(z - b.z) < 170) ok = false;
       for (const a of AIRPORT) if (Math.abs(x - a.x) < 330 && Math.abs(z - a.z) < 190) ok = false;
