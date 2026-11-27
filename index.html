@@ -111,6 +111,17 @@
   #resetLink { color:#a9a58e; cursor:pointer; text-decoration:underline; }
   #overRows { display:grid; grid-template-columns:1fr auto; gap:6px 24px; max-width:420px; margin:0 auto 22px; text-align:left; font-size:15px; font-variant-numeric:tabular-nums; }
   #overRows b { color:var(--amber); text-align:right; }
+  #online { display:flex; flex-direction:column; gap:10px; max-width:620px; }
+  #online label { display:flex; flex-direction:column; gap:4px; font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:#a9a58e; }
+  #online input { background:rgba(30,36,28,.92); border:1px solid var(--line); border-radius:4px; color:var(--ink); font:inherit; font-size:15px; padding:9px 10px; letter-spacing:normal; text-transform:none; -webkit-user-select:text; user-select:text; }
+  #online input:focus { outline:none; border-color:var(--amber); }
+  .netrow { display:flex; gap:8px; flex-wrap:wrap; }
+  .netrow .btn { flex:1 1 200px; padding:10px 8px; font-size:13px; }
+  #netCode { width:96px; flex:none; text-align:center; font-size:18px !important; font-weight:800; letter-spacing:.2em !important; text-transform:uppercase !important; }
+  .netcode { background:rgba(30,36,28,.92); border:1px solid var(--amber); border-radius:6px; padding:14px 18px; display:flex; flex-direction:column; gap:4px; }
+  .netcode small { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:#a9a58e; }
+  .netcode b { font-size:44px; letter-spacing:.3em; color:var(--amber); line-height:1; }
+  .netcode span { font-size:13px; color:#cfcab4; }
 
   /* ---------- compact HUD (phones, small windows, any touch device) ---------- */
   body.compact #keys { display:none; }
@@ -232,6 +243,7 @@
     <div class="tabs" id="menuTabs"></div>
     <div class="cards" id="starters"></div>
     <div id="armory"></div>
+    <div id="online"></div>
     <div class="row" id="menuBtns"></div>
     <div class="help">
       <span id="helpCampaign"></span>
@@ -252,7 +264,7 @@
 <div class="screen" id="shop">
   <div class="box">
     <div class="shophead"><h2>Quartermaster</h2><div id="shopMoney"></div><button class="btn" id="shopClose">Back to battle</button></div>
-    <div class="sub" style="margin:2px 0 0">The battle is paused.</div>
+    <div class="sub" id="shopSub" style="margin:2px 0 0">The battle is paused.</div>
     <div class="tabs" id="tabs"></div>
     <div class="cards" id="shopCards"></div>
   </div>
@@ -263,7 +275,7 @@
     <h1 id="overTitle"></h1>
     <div class="sub" id="overSub"></div>
     <div id="overRows"></div>
-    <button class="btn" style="max-width:280px;font-size:15px;padding:12px" onclick="location.reload()">Back to the campaign map</button>
+    <button class="btn" id="overBtn" style="max-width:280px;font-size:15px;padding:12px">Back to the campaign map</button>
   </div>
 </div>
 
@@ -276,6 +288,7 @@
 <script src="js/sim.js"></script>
 <script src="js/models.js"></script>
 <script src="js/scenery.js"></script>
+<script src="js/net.js"></script>
 <script src="js/game.js"></script>
 <script>
   // Offline support and installability (PWA)

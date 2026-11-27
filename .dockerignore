@@ -1,0 +1,6 @@
+.git
+.github
+.claude
+_site
+**/node_modules
+tools

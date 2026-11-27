@@ -1079,9 +1079,13 @@ function controlUnit(pl, dt) {
 }
 function plHas(pl, id) { return tierOk(id, pl.tiers); }
 // take command of a vehicle (free in any unlocked tier) in sector col. A player's previous own vehicle is withdrawn.
+// Swapping out of a vehicle that is still fighting (a redeploy) has a 20 s cooldown; after losing one there is none.
 function deployPlayer(pl, id, col) {
-  if (!plHas(pl, id) || NONCOMBAT[DEFS[id].role] || battleOver) return null;
-  const old = pl.unit, u = spawnAt(id, pl.team, col); u.mine = true; setControl(pl, u);
+  if (!DEFS[id] || !plHas(pl, id) || NONCOMBAT[DEFS[id].role] || battleOver) return null;
+  const old = pl.unit, redeploy = !!(old && !old.dead);
+  if (redeploy && pl.deployCd > 0) return null;
+  const u = spawnAt(id, pl.team, col); u.mine = true; setControl(pl, u);
+  if (redeploy) pl.deployCd = 20;
   if (old && old.mine && !old.dead) despawn(old);
   return u;
 }

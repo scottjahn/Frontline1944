@@ -7,10 +7,10 @@ const fs = require('fs'), path = require('path'), vm = require('vm');
 const root = path.join(__dirname, '..');
 const front = process.argv[2] || 'eu', minutes = +(process.argv[3] || 6);
 
-const ctx = vm.createContext({ console, Math, Date, FRONTLINE_FRONT: front });
+globalThis.FRONTLINE_FRONT = front;
 for (const f of ['js/vendor/three.min.js', 'js/mapdraw.js', 'js/theatres.js', 'js/defs.js', 'js/world.js', 'js/sim.js'])
-  vm.runInContext(fs.readFileSync(path.join(root, f), 'utf8'), ctx, { filename: f });
-const run = code => vm.runInContext(code, ctx);
+  vm.runInThisContext(fs.readFileSync(path.join(root, f), 'utf8'), { filename: f });
+const run = code => vm.runInThisContext(code);
 
 const t0 = Date.now();
 const result = run(`(() => {

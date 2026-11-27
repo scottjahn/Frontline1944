@@ -1,0 +1,14 @@
+# Run from the repository root:   docker compose -f server/docker-compose.yml up -d --build
+# Then point your reverse proxy (with TLS) at port 8080. It must pass WebSocket upgrades through on /ws.
+services:
+  frontline1944:
+    build:
+      context: ..
+      dockerfile: server/Dockerfile
+    image: frontline1944:latest
+    container_name: frontline1944
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - MAX_ROOMS=6

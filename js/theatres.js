@@ -446,13 +446,17 @@ function customTheatre(m) {
   });
 }
 let THEATRE_ID = 'eu', CUSTOM_MAP = null;
+// a custom map someone else is hosting an online battle on (handed over by the game server, kept for this tab only)
+function netMap(id) {
+  try { if (!/[?&]join=/.test(location.search)) return null; const m = JSON.parse(sessionStorage.getItem('frontline1944.netmap')); return m && 'map-' + m.id === id && THEATRES[m.base] ? m : null; } catch (e) { return null; }
+}
 // Without a browser (the game server) the theatre is set before this file loads: FRONTLINE_FRONT = 'eu' / 'pac' /
 // 'mod', or FRONTLINE_MAP = a custom map record from the map builder.
 if (typeof FRONTLINE_MAP !== 'undefined' && FRONTLINE_MAP && THEATRES[FRONTLINE_MAP.base]) { CUSTOM_MAP = FRONTLINE_MAP; THEATRE_ID = CUSTOM_MAP.base; }
 else if (typeof FRONTLINE_FRONT !== 'undefined' && THEATRES[FRONTLINE_FRONT]) THEATRE_ID = FRONTLINE_FRONT;
 else try {
   const q = new URLSearchParams(location.search).get('front'), s = q || localStorage.getItem(FRONT_KEY);
-  if (s && s.startsWith('map-')) CUSTOM_MAP = loadMaps().find(m => 'map-' + m.id === s) || null;
+  if (s && s.startsWith('map-')) CUSTOM_MAP = loadMaps().find(m => 'map-' + m.id === s) || netMap(s);
   if (CUSTOM_MAP) THEATRE_ID = CUSTOM_MAP.base;
   else if (s && THEATRES[s]) THEATRE_ID = s;
   if (q && (THEATRES[q] || CUSTOM_MAP)) localStorage.setItem(FRONT_KEY, q);

@@ -282,6 +282,7 @@ function onControl(u) {
 }
 function diveKey() {
   if (state !== 'playing' || !me.unit || !me.unit.def.sub) return;
+  if (Online.on) { Online.send({ t: 'dive' }); return; }        // the button label follows the next snapshot
   toggleDive(me); $('tDive').textContent = me.unit.diveT ? 'Rise' : 'Dive';
 }
 // your vehicle is gone: the camera stays on the wreck until you pick another
@@ -289,7 +290,7 @@ function playerDied(u) {
   const w = wreckById.get(u.id); focus = w ? w.mesh.position : null;
   state = 'dead'; deadT = 2.6; input.fire = false; input.zoom = false;
 }
-function switchVehicle() { if (state === 'playing') switchUnit(me); }
+function switchVehicle() { if (state !== 'playing') return; if (Online.on) Online.send({ t: 'switch' }); else switchUnit(me); }
 function computeAim() {
   fwd(camYaw, camPitch, aimDir); const o = camera.position; let best = 1500;
   for (const u of units) {
@@ -389,10 +390,14 @@ function renderShop() {
 function buy(id, command) {
   const d = DEFS[id];
   if (command && d.domain !== 'bld' && !NONCOMBAT[d.role]) { deploy(id); return; }
+  if (Online.on) { if (me.money >= d.cost) Online.send({ t: 'buy', id, col: selCol }); return; }   // the shop redraws with the next snapshot
   if (buyFor(me, id, selCol)) renderShop();
 }
 function toggleShop(on) {
-  if (on && state === 'playing') { state = 'shop'; $('shop').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock(); input.fire = false; input.zoom = false; renderShop(); }
+  if (on && state === 'playing') {
+    state = 'shop'; $('shop').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock(); input.fire = false; input.zoom = false;
+    $('shopSub').textContent = Online.on ? 'The battle carries on while you shop: your vehicle keeps going.' : 'The battle is paused.'; renderShop();
+  }
   else if (!on && state === 'shop') { state = 'playing'; $('shop').classList.remove('on'); }
 }
 // ---- campaign map: shown before the battle, after losing a vehicle, and on M (paused)
@@ -413,22 +418,22 @@ function renderMenu() {
   const a = Account.data, mode = state;
   $('menuTitle').textContent = mode === 'dead' ? 'Vehicle lost' : mode === 'map' ? 'Campaign map' : (TH.game || 'Frontline 1944');
   $('menuSub').textContent = mode === 'dead' ? 'The wreck stays where it fell. Pick a sector on the map and a vehicle to rejoin the battle.'
-    : mode === 'map' ? 'The battle is paused. Redeploy to another sector, visit the Armory, or end the operation and bank your credits.'
-      : TH.str.goal;
+    : mode === 'map' ? (Online.on ? 'The battle carries on. Redeploy to another sector or visit the Armory.' : 'The battle is paused. Redeploy to another sector, visit the Armory, or end the operation and bank your credits.')
+      : Online.code ? `Battle ${Online.code} on the game server. Pick a sector on the map and a vehicle to join the fight.` : TH.str.goal;
   const ft = $('frontTabs'); ft.innerHTML = '';
   for (const k of Object.keys(THEATRES)) {
     const T = THEATRES[k], b = document.createElement('button'); b.className = 'tab' + (k === TH.id ? ' on' : '');
     b.innerHTML = `${T.title}<small></small>`; b.querySelector('small').textContent = T.blurb;
-    b.disabled = mode !== 'menu' && k !== TH.id; if (b.disabled) b.title = 'End the operation first';
-    b.onclick = () => { if (k !== TH.id && mode === 'menu') switchTheatre(k); }; ft.append(b);
+    b.disabled = (mode !== 'menu' || Online.code) && k !== TH.id; if (b.disabled) b.title = Online.code ? 'Leave the online battle first' : 'End the operation first';
+    b.onclick = () => { if (k !== TH.id && !b.disabled) switchTheatre(k); }; ft.append(b);
   }
-  for (const m of loadMaps()) {               // maps built in the map builder
+  if (!Online.code) for (const m of loadMaps()) {               // maps built in the map builder
     const k = 'map-' + m.id, b = document.createElement('button'); b.className = 'tab' + (k === TH.id ? ' on' : '');
     b.innerHTML = '<span></span><small></small>'; b.firstChild.textContent = m.name; b.querySelector('small').textContent = 'Custom · ' + THEATRES[m.base].title;
     b.disabled = mode !== 'menu' && k !== TH.id; if (b.disabled) b.title = 'End the operation first';
     b.onclick = () => { if (k !== TH.id && mode === 'menu') switchTheatre(k); }; ft.append(b);
   }
-  if (mode === 'menu') {
+  if (mode === 'menu' && !Online.code) {
     const b = document.createElement('button'); b.className = 'tab builder'; b.innerHTML = '✎ Map Builder<small>Make your own battlefield</small>';
     b.onclick = () => { location.href = 'editor.html' + (TH.custom ? '?map=' + TH.custom.id : ''); }; ft.append(b);
   }
@@ -437,16 +442,48 @@ function renderMenu() {
   $('sectorInfo').innerHTML = isLanding(selCol) ? `Landing on <b>${SECTORS[selCol]}</b> · ground forces make an amphibious assault on its beach; ships and aircraft join the battle offshore`
     : (selCol < 0 ? `Deploying in <b>${HOME_NAME}</b>` : `Deploying in the <b>${SECTORS[selCol]}</b> sector`) + ` · ${held} of ${sec.length} points held` + (selCol === frontCol() ? ' · front line' : '') + (selCol < 0 ? ' · home runway and harbour' : '');
   const tabs = $('menuTabs'); tabs.innerHTML = '';
-  for (const t of ['Deploy', 'Armory']) {
+  for (const t of ['Deploy', 'Armory', 'Play together']) {
     const b = document.createElement('button'); b.className = 'tab' + (t === menuTab ? ' on' : ''); b.textContent = t;
     b.onclick = () => { menuTab = t; renderMenu(); }; tabs.append(b);
   }
-  $('starters').style.display = menuTab === 'Deploy' ? '' : 'none'; $('armory').style.display = menuTab === 'Armory' ? '' : 'none';
-  if (menuTab === 'Deploy') renderStarters(); else renderArmory();
+  $('starters').style.display = menuTab === 'Deploy' ? '' : 'none'; $('armory').style.display = menuTab === 'Armory' ? '' : 'none'; $('online').style.display = menuTab === 'Play together' ? '' : 'none';
+  if (menuTab === 'Deploy') renderStarters(); else if (menuTab === 'Armory') renderArmory(); else renderOnline();
   const row = $('menuBtns'); row.innerHTML = '';
   const mk = (label, alt, fn) => { const b = document.createElement('button'); b.className = 'btn' + (alt ? ' alt' : ''); b.textContent = label; b.onclick = fn; row.append(b); };
   if (mode === 'map') mk('Back to battle', false, () => toggleMap(false));
-  if (mode !== 'menu') mk('End operation and bank credits', true, () => endBattle());
+  if (Online.code) {
+    if (Online.on && Online.host && mode !== 'menu') mk('End the battle for everyone and bank credits', true, () => Online.send({ t: 'end' }));
+    else if (Online.on && mode !== 'menu') mk('Leave the battle and bank credits', true, () => { Online.ws.close(); Online.on = false; showOver(); });
+    else mk('Back to single player', true, () => Online.leave());
+  } else if (mode !== 'menu') mk('End operation and bank credits', true, () => endBattle());
+}
+// ---- playing together on the game server: host a battle and read out its code, or join one with a code
+function renderOnline() {
+  const box = $('online'); box.innerHTML = '';
+  const field = (label, id, value, ph) => {
+    const l = document.createElement('label'); l.innerHTML = '<span></span><input>'; l.firstChild.textContent = label;
+    const i = l.lastChild; i.id = id; i.value = value; i.placeholder = ph || ''; i.spellcheck = false; i.autocomplete = 'off'; box.append(l); return i;
+  };
+  if (Online.code) {
+    const s = document.createElement('div'); s.className = 'netcode'; s.innerHTML = '<small>Battle code</small><b></b><span></span>';
+    s.querySelector('b').textContent = Online.code; s.querySelector('span').textContent = Online.status; box.append(s); return;
+  }
+  const addr = field('Game server', 'netAddr', Online.url(), 'e.g. frontline.goonlab.opik.net');
+  const name = field('Your name', 'netName', localStorage.getItem(NAME_KEY) || '', 'Shown to the other players');
+  const save = () => { if (addr.value.trim()) localStorage.setItem(SERVER_KEY, addr.value.trim()); if (name.value.trim()) localStorage.setItem(NAME_KEY, name.value.trim().slice(0, 24)); };
+  const row = document.createElement('div'); row.className = 'netrow';
+  const host = document.createElement('button'); host.className = 'btn'; host.textContent = `Host a battle: ${TH.title}`;
+  host.onclick = () => { save(); Online.hostGame(addr.value); };
+  const code = document.createElement('input'); code.id = 'netCode'; code.placeholder = 'CODE'; code.maxLength = 4; code.autocomplete = 'off'; code.spellcheck = false;
+  code.oninput = () => { code.value = code.value.toUpperCase().replace(/[^A-Z]/g, ''); };
+  const join = document.createElement('button'); join.className = 'btn alt'; join.textContent = 'Join with code';
+  join.onclick = () => { save(); Online.joinGame(code.value); };
+  code.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') join.onclick(); };
+  for (const i of [addr, name]) i.onkeydown = e => e.stopPropagation();
+  row.append(host, code, join); box.append(row);
+  const note = document.createElement('div'); note.className = 'note';
+  note.textContent = Online.status || 'Everyone fights on the same side against the computer. The host\'s unlocks set how strong the enemy is, and each player keeps the credits they earn.';
+  box.append(note);
 }
 function renderStarters() {
   const box = $('starters'); box.innerHTML = '';
@@ -487,11 +524,13 @@ function deploy(id) {
   const first = state === 'menu', redeploy = state === 'map' || state === 'shop';
   if (redeploy && me.deployCd > 0) return;
   initAudio();
-  const u = deployPlayer(me, id, selCol); if (!u) return; lastBought = id;     // your previous personal vehicle is withdrawn
-  if (redeploy) me.deployCd = 20;
+  let u = null;
+  if (Online.code) { if (!Online.on) return; Online.send({ t: 'deploy', id, col: selCol }); }      // the server hands the vehicle over
+  else { u = deployPlayer(me, id, selCol); if (!u) return; }     // your previous personal vehicle is withdrawn
+  lastBought = id;
   state = 'playing'; $('menu').classList.remove('on'); $('shop').classList.remove('on'); $('hud').style.display = 'block';
   if (first) { const s = World.info; showBanner(secName(selCol) + (selCol < 0 ? '' : ' sector'), `${s.name}. ${s.desc}`); } else showMsg(`Deployed in ${DEFS[id].name}, ${secName(selCol)}`, 'good');
-  if (u.landedAt) showMsg(`Amphibious landing! You are ashore below ${u.landedAt.name || 'the enemy capital'}.`, 'gold');
+  if (u && u.landedAt) showMsg(`Amphibious landing! You are ashore below ${u.landedAt.name || 'the enemy capital'}.`, 'gold');
   const cv = renderer.domElement; if (!touchMode && cv.requestPointerLock) { try { const r = cv.requestPointerLock(); if (r && r.catch) r.catch(() => { }); } catch (e) { } }
 }
 const startAs = deploy;
@@ -508,7 +547,9 @@ function showOver(winner) {
   if (gain > 0) rows.push([`Front line advanced (${gain} point${gain > 1 ? 's' : ''})`, gain * 150]);
   if (result === 'won') rows.push(['Campaign victory', 3000]);
   const total = rows.reduce((t, r) => t + r[1], 0);
-  Account.reward({ credits: total, kills: st.kills, win, campaignWon: result === 'won', owners: result ? null : POINTS.map(p => p.owner) });
+  // the host's campaign carries on from this battle; someone who joined keeps their own campaign map as it was
+  const keep = Online.code && !Online.host;
+  Account.reward({ credits: total, kills: st.kills, win, campaignWon: result === 'won' && !keep, owners: keep ? Account.data.camps[TH.id] : result ? null : POINTS.map(p => p.owner) });
   $('overTitle').textContent = result === 'won' ? 'Campaign won' : result === 'lost' ? 'Campaign lost' : gain > 0 ? 'Ground gained' : gain < 0 ? 'Ground lost' : 'Stalemate';
   $('overSub').textContent = result === 'won' ? `The ${TEAM_NAME[1 - me.team]} headquarters is rubble. A new campaign begins, and you keep everything you have unlocked.`
     : result === 'lost' ? `The ${TEAM_NAME[me.team]} headquarters has fallen. The campaign starts over, but your unlocks and credits are safe.`
@@ -806,9 +847,12 @@ let lastT = 0;
 function loop(now) {
   requestAnimationFrame(loop);
   const dt = Math.min((now - lastT) / 1000, 0.05); lastT = now;
-  const running = state === 'playing' || state === 'dead' || state === 'over';   // the shop and the map pause single player
+  // the shop and the map pause single player; an online battle runs on the server and never pauses
+  const running = Online.code ? true : state === 'playing' || state === 'dead' || state === 'over';
   if (running) {
-    fillControls(); step(dt); Scenery.update(dt); updateWrecks(dt); updateFx(dt);
+    fillControls();
+    if (Online.code) Online.frame(dt); else step(dt);
+    Scenery.update(dt); updateWrecks(dt); updateFx(dt);
     if (state === 'dead') { deadT -= dt; if (deadT <= 0 && !$('menu').classList.contains('on')) showRespawn(); }
   }
   syncView(running ? dt : 0);
@@ -912,12 +956,17 @@ function init() {
   renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
   scene = new THREE.Scene(); camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 1, 11000);
   ovCtx = $('ov').getContext('2d'); miniCtx = $('mini').getContext('2d'); campCtx = $('camp').getContext('2d');
-  // single player: both armies field the tiers you have unlocked, and you fight for the Allies
+  // single player: both armies field the tiers you have unlocked, and you fight for the Allies.
+  // ?join=CODE: the battle runs on the game server instead, and this page only shows it (net.js).
+  const join = new URLSearchParams(location.search).get('join');
   Rules.tiers = Account.data.tiers;
   me = addPlayer(ALLY, { name: 'You', tiers: Account.data.tiers });
   wireOut();
-  setupTeams();
+  if (join) { for (const p of POINTS) { p.isl = islandOf(p.x, p.z); p.y = p.sea ? 0 : terrainH(p.x, p.z); } menuTab = 'Play together'; }
+  else setupTeams();
   Scenery.init(scene); initPoints();
+  if (join) Online.start(join.toUpperCase());
+  $('overBtn').onclick = () => { if (Online.code) Online.leave(); else location.reload(); };
   bindInput(); bindTouch(); resize();
   selCol = frontCol();
   $('camp').addEventListener('click', e => {
