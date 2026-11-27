@@ -49,9 +49,10 @@ function tellU(u, text, cls) { if (u && u.ctrl) Out.tell(u.ctrl, text, cls); }
 const players = [];
 function blankStats() { return { kills: 0, defect: 0, caps: 0, credits: 0, killCr: 0, capCr: 0 }; }
 function blankCtl() { return { w: false, s: false, a: false, d: false, e: false, q: false, fire: false, alt: false, yaw: 0, aimDir: V().set(0, 0, 1), aimPoint: V(), lock: null }; }
+let playerId = 0;
 function addPlayer(team, o) {
   o = o || {};
-  const pl = { id: o.id || players.length + 1, name: o.name || 'Player', team, unit: null, money: 600, deployCd: 0, hqMsgT: -99,
+  const pl = { id: ++playerId, name: o.name || 'Player', team, unit: null, money: 600, deployCd: 0, hqMsgT: -99,
     tiers: o.tiers || Rules.tiers, stats: blankStats(), ctl: blankCtl() };
   players.push(pl); return pl;
 }
@@ -1077,11 +1078,24 @@ function controlUnit(pl, dt) {
   if (c.fire) fireGun(u, c.aimPoint, 0);
   if (c.alt) fireAlt(u, c.aimPoint);
 }
-function plHas(pl, id) { return tierOk(id, pl.tiers); }
+function plHas(pl, id) { return tierOk(id, pl.tiers) && sideOk(id, pl.team); }
+// a vehicle a side may field: its own (buildings belong to nobody)
+function sideOk(id, team) { const d = DEFS[id]; return !!d && (d.team === undefined || d.team === team); }
+// the same kind of vehicle for the other side: the shop lists name the Allied ones; the Axis version is the mirror
+// built from it (null when the Axis has no counterpart)
+const SIDE_IDS = {};
+function sideId(id, team) {
+  const d = DEFS[id]; if (!d) return null;
+  if (d.team === undefined || d.team === team) return id;
+  const key = id + '>' + team;
+  if (!(key in SIDE_IDS)) { const m = Object.values(DEFS).find(o => o.team === team && (o.base === id || (d.base && o.id === d.base))); SIDE_IDS[key] = m ? m.id : null; }
+  return SIDE_IDS[key];
+}
 // take command of a vehicle (free in any unlocked tier) in sector col. A player's previous own vehicle is withdrawn.
 // Swapping out of a vehicle that is still fighting (a redeploy) has a 20 s cooldown; after losing one there is none.
 function deployPlayer(pl, id, col) {
   if (!DEFS[id] || !plHas(pl, id) || NONCOMBAT[DEFS[id].role] || battleOver) return null;
+  if (col < 0 && pl.team !== ALLY && !POINTS.some(p => p.eng && p.owner === pl.team)) col = COLS - 1;   // only the Allies start in their homeland
   const old = pl.unit, redeploy = !!(old && !old.dead);
   if (redeploy && pl.deployCd > 0) return null;
   const u = spawnAt(id, pl.team, col); u.mine = true; setControl(pl, u);
@@ -1104,7 +1118,7 @@ function toggleDive(pl) {
 // col: the sector escorts join in. Returns true when it was bought.
 function buyFor(pl, id, col) {
   const d = DEFS[id], nc = NONCOMBAT[d.role], isB = d.domain === 'bld';
-  if (!isB && !nc && !plHas(pl, id)) return false;
+  if (!sideOk(id, pl.team) || (!isB && !nc && !plHas(pl, id))) return false;
   if (pl.money < d.cost) return false;
   if (isB) { const u = build(pl.team, id); if (!u) return false; pl.money -= d.cost; tell(pl, `Construction started: ${d.name}`, 'good'); return true; }
   pl.money -= d.cost;

@@ -117,7 +117,18 @@
   #online input:focus { outline:none; border-color:var(--amber); }
   .netrow { display:flex; gap:8px; flex-wrap:wrap; }
   .netrow .btn { flex:1 1 200px; padding:10px 8px; font-size:13px; }
-  #netCode { width:96px; flex:none; text-align:center; font-size:18px !important; font-weight:800; letter-spacing:.2em !important; text-transform:uppercase !important; }
+  .netcodein { width:150px; flex:none; text-align:center; font-size:16px !important; font-weight:800; letter-spacing:.14em !important; text-transform:uppercase !important; }
+  .netcodein::placeholder { letter-spacing:.04em; font-weight:400; font-size:13px; }
+  .nethead { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--amber); margin-top:6px; }
+  .netlist { display:flex; flex-direction:column; gap:4px; }
+  .netlist div { display:flex; justify-content:space-between; gap:12px; background:rgba(30,36,28,.92); border-left:4px solid var(--ally); border-radius:3px; padding:6px 10px; font-size:13px; }
+  .netlist div.axis { border-left-color:var(--axis); }
+  .netlist span { color:#a9a58e; font-size:12px; }
+  #nameRow { display:flex; align-items:center; gap:10px; margin:10px 0 0; flex-wrap:wrap; font-size:13px; }
+  #nameRow span { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:#a9a58e; }
+  #nameRow input { background:rgba(30,36,28,.92); border:1px solid var(--line); border-radius:4px; color:var(--amber); font:inherit; font-weight:800; font-size:15px; padding:6px 10px; width:190px; -webkit-user-select:text; user-select:text; }
+  #nameRow input:focus { outline:none; border-color:var(--amber); }
+  #nameRow small { color:#a9a58e; font-size:11px; }
   .netcode { background:rgba(30,36,28,.92); border:1px solid var(--amber); border-radius:6px; padding:14px 18px; display:flex; flex-direction:column; gap:4px; }
   .netcode small { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:#a9a58e; }
   .netcode b { font-size:44px; letter-spacing:.3em; color:var(--amber); line-height:1; }
@@ -240,6 +251,7 @@
     <div class="sub" id="menuSub"></div>
     <canvas id="camp" width="1120" height="600"></canvas>
     <div id="sectorInfo"></div>
+    <div id="nameRow" style="display:none"></div>
     <div class="tabs" id="menuTabs"></div>
     <div class="cards" id="starters"></div>
     <div id="armory"></div>

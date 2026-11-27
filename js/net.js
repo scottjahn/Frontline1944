@@ -6,7 +6,8 @@
 // back to the server. The server's side is server/room.js.
 const SERVER_KEY = 'frontline1944.server', NAME_KEY = 'frontline1944.name', HOSTKEY_KEY = 'frontline1944.hostkey', NETMAP_KEY = 'frontline1944.netmap';
 const Online = {
-  on: false, ws: null, code: '', host: false, status: '', players: 0,
+  on: false, ws: null, code: '', host: false, mode: 'coop', status: '', players: 0,
+  pilots: new Map(), roster: [],               // unit id -> the player driving it; everyone in the battle
   mirror: new Map(), projMap: new Map(), snapT: 0, gap: 1 / 15, sendT: 0, lastBuild: 0,
 
   // the server's address: what the player typed in once, or this page's own server when the game is served by it
@@ -21,6 +22,12 @@ const Online = {
     return (secure ? 'wss://' : 'ws://') + addr.replace(/^https?:\/\//, '') + '/ws';
   },
   name() { return localStorage.getItem(NAME_KEY) || 'Player'; },
+  setName(n) {
+    n = String(n || '').replace(/[<>]/g, '').trim().slice(0, 16); if (!n) return;
+    localStorage.setItem(NAME_KEY, n); this.send({ t: 'name', name: n });
+  },
+  // versus: change sides (only while not in a vehicle)
+  side(team) { this.send({ t: 'side', team }); },
   connect(addr, onOpen, onMsg) {
     const u = this.wsUrl(addr); if (!u) { this.fail('Enter the game server address first.'); return null; }
     let ws; try { ws = new WebSocket(u); } catch (e) { this.fail('That server address does not look right.'); return null; }
@@ -33,18 +40,21 @@ const Online = {
   send(m) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(m)); },
 
   // Host: the server starts a battle on this theatre (with your unlocks and your campaign's front line), then this
-  // page reloads into it as its host.
-  hostGame(addr) {
+  // page reloads into it as its host. mode: 'coop' (everyone against the computer) or 'pvp' (Allies against Axis).
+  // code: the code the host wants (3 to 8 letters or numbers), or '' for a random one.
+  hostGame(addr, mode, code) {
+    code = (code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (code && (code.length < 3 || code.length > 8)) { this.fail('A battle code is 3 to 8 letters or numbers.'); return; }
     this.status = 'Starting a battle on the server…'; renderMenu();
-    this.connect(addr, ws => ws.send(JSON.stringify({ t: 'host', front: TH.custom ? TH.baseId : TH.id, map: TH.custom || null, tiers: Account.data.tiers, owners: POINTS.map(p => p.owner) })),
+    this.connect(addr, ws => ws.send(JSON.stringify({ t: 'host', mode, code, front: TH.custom ? TH.baseId : TH.id, map: TH.custom || null, tiers: Account.data.tiers, owners: POINTS.map(p => p.owner) })),
       (m, ws) => {
         if (m.t === 'hosted') { ws.close(); sessionStorage.setItem(HOSTKEY_KEY, m.key); if (TH.custom) sessionStorage.setItem(NETMAP_KEY, JSON.stringify(TH.custom)); this.go(m.front, m.code); }
         else if (m.t === 'error') { ws.close(); this.fail(m.text); }
       });
   },
   joinGame(code) {
-    code = (code || '').toUpperCase().replace(/[^A-Z]/g, '');
-    if (code.length !== 4) { this.fail('A battle code is four letters.'); return; }
+    code = (code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (code.length < 3 || code.length > 8) { this.fail('A battle code is 3 to 8 letters or numbers.'); return; }
     this.go(TH.id, code);
   },
   go(front, code) { location.href = location.pathname + '?front=' + encodeURIComponent(front) + '&join=' + code; },
@@ -61,8 +71,9 @@ const Online = {
   onMsg(m) {
     if (m.t === 's') return this.snapshot(m);
     if (m.t === 'welcome') {
-      this.on = true; this.host = m.host; this.players = m.players; me.id = m.id; me.team = m.team; startOwned = m.startOwned;
-      this.status = `In battle ${m.code}` + (m.host ? ' · you are the host: read this code out to the others' : '');
+      this.on = true; this.host = m.host; this.mode = m.mode; this.players = m.players; me.id = m.id; me.team = m.team; startOwned = m.startOwned;
+      selCol = frontCol();
+      this.status = (m.mode === 'pvp' ? 'Versus: Allies against Axis' : 'Co-op: everyone against the computer') + (m.host ? ' · you are the host: read the code out to the others' : '');
       showMsg(`Joined battle ${m.code}`, 'good'); renderMenu();
     } else if (m.t === 'front') {          // the battle is on another map: load that one, then join again
       if (m.map) sessionStorage.setItem(NETMAP_KEY, JSON.stringify(m.map));
@@ -96,6 +107,11 @@ const Online = {
     battleT = s.b[0]; time = s.b[1];
     s.f.forEach((n, t) => { plots[t] = Array.from({ length: n }, () => ({ unit: null })); });
     const m = s.me; me.money = m[1]; me.deployCd = m[2]; me.stats = m[3];
+    if (m[8] !== undefined && m[8] !== me.team) { me.team = m[8]; selCol = frontCol(); if ($('menu').classList.contains('on')) renderMenu(); }   // changed sides
+    const sig = JSON.stringify(s.n || []), changed = sig !== this.rosterSig; this.rosterSig = sig;
+    this.pilots.clear(); this.roster = s.n || [];
+    if (changed && menuTab === 'Play together' && $('menu').classList.contains('on')) renderOnline();
+    for (const r of this.roster) if (r[3] && r[0] !== me.id) this.pilots.set(r[3], { id: r[0], name: r[1], team: r[2] });
     const mu = m[0] ? this.mirror.get(m[0]) : null;
     if (mu && me.unit !== mu) { me.unit = mu; onControl(mu); }       // a vehicle we were given before its control message arrived
     if (!mu) me.unit = null;

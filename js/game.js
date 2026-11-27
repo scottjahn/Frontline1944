@@ -279,6 +279,7 @@ function onControl(u) {
   const tc = $('touch'); tc.classList.toggle('heli', !!u.def.heli); tc.classList.toggle('sub', !!u.def.sub); tc.classList.toggle('noalt', !u.def.alt);
   if (u.def.alt) $('tAlt').textContent = u.def.alt.label.split(' ')[0];
   $('tDive').textContent = u.diveT > 0.5 ? 'Rise' : 'Dive';
+  if (pendingDeploy) { const p = pendingDeploy; pendingDeploy = null; enterBattle(p.id, p.col, p.first, u); }
 }
 function diveKey() {
   if (state !== 'playing' || !me.unit || !me.unit.def.sub) return;
@@ -365,7 +366,7 @@ function renderShop() {
   }
   const box = $('shopCards'); box.innerHTML = '';
   const mobile = units.filter(u => u.team === me.team && u.def.domain !== 'bld').length;
-  for (const id of SHOP[shopTab]) {
+  for (const id of SHOP[shopTab].map(i => sideId(i, me.team)).filter(Boolean)) {
     const d = DEFS[id], isB = d.domain === 'bld', nc = NONCOMBAT[d.role], own = isB || nc || Account.has(id);
     const full = isB ? !plots[me.team].some(p => !p.unit) : mobile >= UNIT_CAP + 8;
     const can = own && me.money >= d.cost && !full;
@@ -401,10 +402,18 @@ function toggleShop(on) {
   else if (!on && state === 'shop') { state = 'playing'; $('shop').classList.remove('on'); }
 }
 // ---- campaign map: shown before the battle, after losing a vehicle, and on M (paused)
-function frontCol() { let c = 0; for (const p of POINTS) if (!p.eng && p.owner === ALLY) c = Math.max(c, p.col); return c; }
-function canDeployIn(c) { return c <= 0 || POINTS.some(p => secOf(p) === c && p.owner === ALLY) || (TH.islands && c === frontCol() + 1 && c < COLS); }
+// The Allies push east from sector 0 (and their homeland, -1); the Axis push west from the last sector.
+function frontCol() {
+  const t = me.team; let c = t === ALLY ? 0 : COLS - 1;
+  for (const p of POINTS) if (!p.eng && p.owner === t) c = t === ALLY ? Math.max(c, p.col) : Math.min(c, p.col);
+  return c;
+}
+function canDeployIn(c) {
+  const t = me.team, home = t === ALLY ? c <= 0 : c === COLS - 1, next = frontCol() + (t === ALLY ? 1 : -1);
+  return home || POINTS.some(p => secOf(p) === c && p.owner === t) || (TH.islands && c === next && c >= 0 && c < COLS);
+}
 // islands: picking a sector the Allies hold nothing in means an amphibious landing there
-function isLanding(c) { return TH.islands && c >= 0 && !POINTS.some(p => secOf(p) === c && p.owner === ALLY); }
+function isLanding(c) { return TH.islands && c >= 0 && !POINTS.some(p => secOf(p) === c && p.owner === me.team); }
 function secPoints(c) { return POINTS.filter(p => secOf(p) === c); }
 function openMenu() {
   if (!canDeployIn(selCol)) selCol = frontCol();
@@ -438,7 +447,7 @@ function renderMenu() {
     b.onclick = () => { location.href = 'editor.html' + (TH.custom ? '?map=' + TH.custom.id : ''); }; ft.append(b);
   }
   $('acct').innerHTML = `<b>${a.credits.toLocaleString()}</b> credits` + (mode !== 'menu' ? ` <i>+${me.stats.credits.toLocaleString()} this battle</i>` : '') + `<small>${a.battles} battles · ${a.wins} won · ${a.kills} kills · ${a.campaigns} campaigns won</small>`;
-  const sec = secPoints(selCol), held = sec.filter(p => p.owner === ALLY).length;
+  const sec = secPoints(selCol), held = sec.filter(p => p.owner === me.team).length;
   $('sectorInfo').innerHTML = isLanding(selCol) ? `Landing on <b>${SECTORS[selCol]}</b> · ground forces make an amphibious assault on its beach; ships and aircraft join the battle offshore`
     : (selCol < 0 ? `Deploying in <b>${HOME_NAME}</b>` : `Deploying in the <b>${SECTORS[selCol]}</b> sector`) + ` · ${held} of ${sec.length} points held` + (selCol === frontCol() ? ' · front line' : '') + (selCol < 0 ? ' · home runway and harbour' : '');
   const tabs = $('menuTabs'); tabs.innerHTML = '';
@@ -448,6 +457,7 @@ function renderMenu() {
   }
   $('starters').style.display = menuTab === 'Deploy' ? '' : 'none'; $('armory').style.display = menuTab === 'Armory' ? '' : 'none'; $('online').style.display = menuTab === 'Play together' ? '' : 'none';
   if (menuTab === 'Deploy') renderStarters(); else if (menuTab === 'Armory') renderArmory(); else renderOnline();
+  renderNameRow();
   const row = $('menuBtns'); row.innerHTML = '';
   const mk = (label, alt, fn) => { const b = document.createElement('button'); b.className = 'btn' + (alt ? ' alt' : ''); b.textContent = label; b.onclick = fn; row.append(b); };
   if (mode === 'map') mk('Back to battle', false, () => toggleMap(false));
@@ -464,30 +474,70 @@ function renderOnline() {
     const l = document.createElement('label'); l.innerHTML = '<span></span><input>'; l.firstChild.textContent = label;
     const i = l.lastChild; i.id = id; i.value = value; i.placeholder = ph || ''; i.spellcheck = false; i.autocomplete = 'off'; box.append(l); return i;
   };
-  if (Online.code) {
+  const head = text => { const h = document.createElement('div'); h.className = 'nethead'; h.textContent = text; box.append(h); };
+  const btn = (label, alt, fn, row) => { const b = document.createElement('button'); b.className = 'btn' + (alt ? ' alt' : ''); b.textContent = label; b.onclick = fn; row.append(b); return b; };
+  const codeBox = (ph) => {
+    const i = document.createElement('input'); i.className = 'netcodein'; i.placeholder = ph; i.maxLength = 8; i.autocomplete = 'off'; i.spellcheck = false;
+    i.oninput = () => { i.value = i.value.toUpperCase().replace(/[^A-Z0-9]/g, ''); }; return i;
+  };
+  if (Online.code) {                        // in a battle: its code, who is playing, and (versus) which side you are on
     const s = document.createElement('div'); s.className = 'netcode'; s.innerHTML = '<small>Battle code</small><b></b><span></span>';
-    s.querySelector('b').textContent = Online.code; s.querySelector('span').textContent = Online.status; box.append(s); return;
+    s.querySelector('b').textContent = Online.code; s.querySelector('span').textContent = Online.status; box.append(s);
+    if (Online.roster.length) {
+      head('Players');
+      const list = document.createElement('div'); list.className = 'netlist';
+      for (const r of Online.roster) {
+        const d = document.createElement('div'); d.className = r[2] === ALLY ? 'ally' : 'axis';
+        const unit = r[3] && units.find(u => u.id === r[3]);
+        d.innerHTML = '<b></b><span></span>'; d.firstChild.textContent = r[1] + (r[0] === me.id ? ' (you)' : '');
+        d.lastChild.textContent = SIDE_PL[r[2]] + ' · ' + (unit ? unit.def.name : 'choosing a vehicle'); list.append(d);
+      }
+      box.append(list);
+    }
+    if (Online.on && Online.mode === 'pvp') {
+      head('Your side');
+      const row = document.createElement('div'); row.className = 'netrow';
+      for (const t of [ALLY, AXIS]) { const b = btn(`Fight for the ${SIDE_PL[t]}`, t !== me.team, () => Online.side(t), row); b.disabled = t === me.team || !!me.unit; }
+      box.append(row);
+      if (me.unit) { const n = document.createElement('div'); n.className = 'note'; n.textContent = 'You can change sides when you are not in a vehicle.'; box.append(n); }
+    }
+    return;
   }
   const addr = field('Game server', 'netAddr', Online.url(), 'e.g. frontline.goonlab.opik.net');
-  const name = field('Your name', 'netName', localStorage.getItem(NAME_KEY) || '', 'Shown to the other players');
-  const save = () => { if (addr.value.trim()) localStorage.setItem(SERVER_KEY, addr.value.trim()); if (name.value.trim()) localStorage.setItem(NAME_KEY, name.value.trim().slice(0, 24)); };
-  const row = document.createElement('div'); row.className = 'netrow';
-  const host = document.createElement('button'); host.className = 'btn'; host.textContent = `Host a battle: ${TH.title}`;
-  host.onclick = () => { save(); Online.hostGame(addr.value); };
-  const code = document.createElement('input'); code.id = 'netCode'; code.placeholder = 'CODE'; code.maxLength = 4; code.autocomplete = 'off'; code.spellcheck = false;
-  code.oninput = () => { code.value = code.value.toUpperCase().replace(/[^A-Z]/g, ''); };
-  const join = document.createElement('button'); join.className = 'btn alt'; join.textContent = 'Join with code';
-  join.onclick = () => { save(); Online.joinGame(code.value); };
-  code.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') join.onclick(); };
+  const name = field('Your name', 'netName', localStorage.getItem(NAME_KEY) || '', 'Shown above your vehicle to the other players');
+  const save = () => { if (addr.value.trim()) localStorage.setItem(SERVER_KEY, addr.value.trim()); if (name.value.trim()) localStorage.setItem(NAME_KEY, name.value.trim().slice(0, 16)); };
   for (const i of [addr, name]) i.onkeydown = e => e.stopPropagation();
-  row.append(host, code, join); box.append(row);
+  head(`Host a battle on the ${TH.title}`);
+  const hrow = document.createElement('div'); hrow.className = 'netrow';
+  const own = codeBox('Code (optional)'); own.title = 'Pick your own code, 3 to 8 letters or numbers. Leave it empty for a random one.';
+  hrow.append(own);
+  btn('Co-op: all of us vs the computer', false, () => { save(); Online.hostGame(addr.value, 'coop', own.value); }, hrow);
+  btn('Versus: Allies vs Axis', false, () => { save(); Online.hostGame(addr.value, 'pvp', own.value); }, hrow);
+  own.onkeydown = e => e.stopPropagation();
+  box.append(hrow);
+  head('Join a battle');
+  const jrow = document.createElement('div'); jrow.className = 'netrow';
+  const code = codeBox('CODE'); jrow.append(code);
+  const join = btn('Join with code', true, () => { save(); Online.joinGame(code.value); }, jrow);
+  code.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') join.onclick(); };
+  box.append(jrow);
   const note = document.createElement('div'); note.className = 'note';
-  note.textContent = Online.status || 'Everyone fights on the same side against the computer. The host\'s unlocks set how strong the enemy is, and each player keeps the credits they earn.';
+  note.textContent = Online.status || 'Co-op: everyone fights for the Allies against the computer, and the host\'s unlocks set how strong the enemy is. Versus: players split between the Allies and the Axis, with the computer filling both armies. Everyone keeps the credits they earn.';
   box.append(note);
+}
+// online: the name others see above your vehicle, changeable from the menu (and the respawn screen)
+function renderNameRow() {
+  const row = $('nameRow'); row.style.display = Online.code ? '' : 'none';
+  if (!Online.code || row.firstChild) return;
+  row.innerHTML = '<span>Playing as</span><input id="nameIn" maxlength="16" autocomplete="off" spellcheck="false"><small>Others see this above your vehicle</small>';
+  const i = $('nameIn'); i.value = Online.name();
+  const save = () => { if (i.value.trim() && i.value.trim() !== Online.name()) { Online.setName(i.value); showMsg(`You are now ${Online.name()}`, 'good'); } };
+  i.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') i.blur(); };
+  i.onchange = save; i.onblur = save;
 }
 function renderStarters() {
   const box = $('starters'); box.innerHTML = '';
-  const ids = SHOP.Air.concat(SHOP.Land, SHOP.Sea).filter(id => !NONCOMBAT[DEFS[id].role] && Account.has(id));
+  const ids = SHOP.Air.concat(SHOP.Land, SHOP.Sea).map(i => sideId(i, me.team)).filter(id => id && !NONCOMBAT[DEFS[id].role] && Account.has(id));
   if (!ids.includes(lastBought)) lastBought = ids[0];
   const wait = state === 'map' && me.deployCd > 0;
   for (const id of ids) {
@@ -519,20 +569,31 @@ function renderArmory() {
   box.append(note);
 }
 // take command of a vehicle in the selected sector: free in any unlocked tier
+// Online, the server hands the vehicle over a moment later (onControl), and the menu stays up until it does.
+let pendingDeploy = null;
 function deploy(id) {
-  if (!Account.has(id) || NONCOMBAT[DEFS[id].role] || state === 'over') return;
+  if (!Account.has(id) || !sideOk(id, me.team) || NONCOMBAT[DEFS[id].role] || state === 'over') return;
   const first = state === 'menu', redeploy = state === 'map' || state === 'shop';
   if (redeploy && me.deployCd > 0) return;
   initAudio();
-  let u = null;
-  if (Online.code) { if (!Online.on) return; Online.send({ t: 'deploy', id, col: selCol }); }      // the server hands the vehicle over
-  else { u = deployPlayer(me, id, selCol); if (!u) return; }     // your previous personal vehicle is withdrawn
+  if (Online.code) {
+    if (!Online.on || pendingDeploy) return;
+    const p = pendingDeploy = { id, col: selCol, first };
+    Online.send({ t: 'deploy', id, col: selCol }); lockPointer();
+    setTimeout(() => { if (pendingDeploy === p) { pendingDeploy = null; if (document.exitPointerLock) document.exitPointerLock(); showMsg('The server could not deploy that vehicle. Try again.', 'bad'); } }, 4000);
+    return;
+  }
+  const u = deployPlayer(me, id, selCol); if (!u) return;     // your previous personal vehicle is withdrawn
+  enterBattle(id, selCol, first, u);
+}
+function enterBattle(id, col, first, u) {
   lastBought = id;
   state = 'playing'; $('menu').classList.remove('on'); $('shop').classList.remove('on'); $('hud').style.display = 'block';
-  if (first) { const s = World.info; showBanner(secName(selCol) + (selCol < 0 ? '' : ' sector'), `${s.name}. ${s.desc}`); } else showMsg(`Deployed in ${DEFS[id].name}, ${secName(selCol)}`, 'good');
+  if (first) { const s = World.info; showBanner(secName(col) + (col < 0 ? '' : ' sector'), `${s.name}. ${s.desc}`); } else showMsg(`Deployed in ${DEFS[id].name}, ${secName(col)}`, 'good');
   if (u && u.landedAt) showMsg(`Amphibious landing! You are ashore below ${u.landedAt.name || 'the enemy capital'}.`, 'gold');
-  const cv = renderer.domElement; if (!touchMode && cv.requestPointerLock) { try { const r = cv.requestPointerLock(); if (r && r.catch) r.catch(() => { }); } catch (e) { } }
+  if (!Online.code) lockPointer();
 }
+function lockPointer() { const cv = renderer.domElement; if (!touchMode && cv.requestPointerLock) { try { const r = cv.requestPointerLock(); if (r && r.catch) r.catch(() => { }); } catch (e) { } } }
 const startAs = deploy;
 function showRespawn() { openMenu(); }
 // The battle is over (sim.js endBattle): winner is the side whose enemy headquarters fell, undefined when the clock
@@ -548,9 +609,10 @@ function showOver(winner) {
   if (result === 'won') rows.push(['Campaign victory', 3000]);
   const total = rows.reduce((t, r) => t + r[1], 0);
   // the host's campaign carries on from this battle; someone who joined keeps their own campaign map as it was
-  const keep = Online.code && !Online.host;
+  const keep = Online.code && (!Online.host || Online.mode === 'pvp');
   Account.reward({ credits: total, kills: st.kills, win, campaignWon: result === 'won' && !keep, owners: keep ? Account.data.camps[TH.id] : result ? null : POINTS.map(p => p.owner) });
-  $('overTitle').textContent = result === 'won' ? 'Campaign won' : result === 'lost' ? 'Campaign lost' : gain > 0 ? 'Ground gained' : gain < 0 ? 'Ground lost' : 'Stalemate';
+  const vs = Online.mode === 'pvp';
+  $('overTitle').textContent = result === 'won' ? (vs ? 'Victory' : 'Campaign won') : result === 'lost' ? (vs ? 'Defeat' : 'Campaign lost') : gain > 0 ? 'Ground gained' : gain < 0 ? 'Ground lost' : 'Stalemate';
   $('overSub').textContent = result === 'won' ? `The ${TEAM_NAME[1 - me.team]} headquarters is rubble. A new campaign begins, and you keep everything you have unlocked.`
     : result === 'lost' ? `The ${TEAM_NAME[me.team]} headquarters has fallen. The campaign starts over, but your unlocks and credits are safe.`
       : `The operation is over. The ${SIDE_PL[me.team]} hold ${ownedBy(me.team)} of ${POINTS.length} points; the front stays where you left it for the next battle.`;
@@ -569,7 +631,9 @@ function drawOverlay() {
   if (input.zoom && me.unit) zoomTarget = nearestToReticle(0.1);
   for (const u of units) {
     if (u === me.unit) continue;
-    const dist = u.pos.distanceTo(camera.position), maxD = (u.def.domain === 'bld' ? 1100 : 2000) * World.vis;
+    const pilot = Online.pilots.get(u.id), dist = u.pos.distanceTo(camera.position);
+    // friends' vehicles are marked wherever they are; other markers only show nearby
+    const maxD = pilot && pilot.team === me.team ? 9000 : (u.def.domain === 'bld' ? 1100 : 2000) * World.vis * (pilot ? 1.5 : 1);
     if (dist > maxD) continue;
     if (u.team !== me.team && u.def.sub && u.dive > 0.5 && dist > 450) continue;
     T1.copy(u.pos); T1.y += (u.def.centerY || 0) + (u.def.len ? u.def.beam * 1.6 : u.def.radius * 0.9) + 3; T1.project(camera);
@@ -580,6 +644,17 @@ function drawOverlay() {
     if (en) { c.moveTo(sx, sy - s); c.lineTo(sx + s, sy); c.lineTo(sx, sy + s); c.lineTo(sx - s, sy); }
     else { c.moveTo(sx - s, sy - s * 0.7); c.lineTo(sx + s, sy - s * 0.7); c.lineTo(sx, sy + s * 0.8); }
     c.closePath(); c.fill(); c.stroke();
+    if (pilot) {                          // a person, not the computer: ringed, with a name tag in their side's colour
+      const col = en ? '#e0443a' : '#2f6fe6';
+      c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.55)'; c.beginPath(); c.arc(sx, sy, s + 7, 0, 6.283); c.stroke();
+      c.lineWidth = 2; c.strokeStyle = '#fff'; c.stroke();
+      c.font = '800 14px "Trebuchet MS",sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
+      const label = pilot.name + (dist > 600 ? '  ' + (dist * 3 / 5280).toFixed(1) + ' mi' : ''), tw = c.measureText(label).width + 14, ty = sy - s - 22;
+      c.fillStyle = col; c.strokeStyle = '#fff'; c.lineWidth = 1.5;
+      c.beginPath(); c.moveTo(sx - tw / 2, ty - 10); c.lineTo(sx + tw / 2, ty - 10); c.lineTo(sx + tw / 2, ty + 10); c.lineTo(sx + 5, ty + 10); c.lineTo(sx, ty + 15);
+      c.lineTo(sx - 5, ty + 10); c.lineTo(sx - tw / 2, ty + 10); c.closePath(); c.fill(); c.stroke();
+      c.fillStyle = '#fff'; c.fillText(label, sx, ty + 1); c.textBaseline = 'alphabetic';
+    }
     if (dist < 420 || u === zoomTarget) {
       const bw = 34; c.fillStyle = 'rgba(0,0,0,.55)'; c.fillRect(sx - bw / 2, sy - s - 8, bw, 4);
       c.fillStyle = en ? '#ff5a4d' : '#7fd66a'; c.fillRect(sx - bw / 2, sy - s - 8, bw * clamp(u.hp / u.maxHp, 0, 1), 4);
@@ -662,6 +737,18 @@ function drawUnitDots(c, X, Z, k) {
     if (u.def.domain === 'bld') { const q = (u.def.model === 'hq' ? 7 : 4) * k; c.fillRect(x - q / 2, z - q / 2, q, q); }
     else if (u.def.domain === 'air') { c.beginPath(); c.moveTo(x, z - 3 * k); c.lineTo(x + 3 * k, z + 2 * k); c.lineTo(x - 3 * k, z + 2 * k); c.fill(); }
     else { c.beginPath(); c.arc(x, z, (u.def.domain === 'sea' ? 3 : 2) * k, 0, 6.3); c.fill(); }
+  }
+  drawPilots(c, X, Z, 4, true);
+}
+// other people's vehicles on a map: a white ring and their name
+function drawPilots(c, X, Z, r, names) {
+  for (const u of units) {
+    const pilot = Online.pilots.get(u.id); if (!pilot || (pilot.team !== me.team && hdist(u.pos, focus || u.pos) > 1500 * World.vis)) continue;
+    const x = X(u.pos.x), z = Z(u.pos.z);
+    c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.beginPath(); c.arc(x, z, r, 0, 6.3); c.stroke();
+    if (!names) continue;
+    c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.8)'; c.strokeText(pilot.name, x, z - r - 3);
+    c.fillStyle = pilot.team === ALLY ? '#bcd4ff' : '#ffb3a8'; c.fillText(pilot.name, x, z - r - 3);
   }
 }
 // the corner map shows the ground around you; M opens the whole campaign
@@ -772,6 +859,8 @@ function drawCamp() {
     if (u.team !== me.team && u.def.sub && u.dive > 0.5) continue;
     const q = euWorld(u.pos.x, u.pos.z, w, h); c.fillStyle = u.team === ALLY ? '#bcd4ff' : '#ffb3a8'; c.fillRect(q[0] - 1.5, q[1] - 1.5, 3, 3);
   }
+  c.font = '700 11px "Trebuchet MS",sans-serif'; c.textAlign = 'center';
+  drawPilots(c, x => euWorld(x, 0, w, h)[0], z => euWorld(0, z, w, h)[1], 6, true);
   for (const p of POINTS) {
     const q = euPoint(p, w, h), r = p.lane === 1 ? 8 : p.eng ? 7 : 6;
     c.beginPath(); c.arc(q[0], q[1], r, 0, 6.3); c.fillStyle = p.owner < 0 ? '#f2f0e0' : p.owner === ALLY ? '#3f7dff' : '#f04a3c'; c.fill();
@@ -829,7 +918,7 @@ function updateHUD(dt) {
     if (cp.post) txt = cp.owner === me.team ? `${cp.name} · held by the ${SIDE_PL[me.team]}` : `${cp.name} · destroy the ${TEAM_NAME[cp.owner]} command post to open it for capture`;
     else if (!fits) txt = `${cp.name} · open: only ${cp.sea ? 'warships' : 'ground forces'} can capture it`;
     else if (cp.contest) txt = `${cp.name} · contested! Clear the enemy out`;
-    else if (!canCap(cp, me.team)) txt = `${cp.name} · cut off: take ${(cp.eng ? ENG[cp.col - 1] : PT(cp.col - 1, cp.lane)).name} first`;
+    else if (!canCap(cp, me.team)) { const k = me.team === ALLY ? -1 : 1, n = cp.eng ? ENG[cp.col + k] : PT(cp.col + k, cp.lane); txt = n ? `${cp.name} · cut off: take ${n.name} first` : `${cp.name} · cut off`; }
     else { txt = `Capturing ${cp.name}`; k = Math.max(0, cp.prog); }
     capEl.style.display = 'block'; $('capTxt').textContent = txt; $('capBar').style.width = k * 100 + '%'; $('capBar').parentNode.style.display = k > 0 || txt.startsWith('Capturing') ? '' : 'none';
   } else capEl.style.display = 'none';
@@ -974,7 +1063,7 @@ function init() {
     let c = 0, bd = 1e9;                   // the sector whose nearest point is closest to the click
     for (const p of POINTS) { const q = euPoint(p, cv.width, cv.height), dd = Math.hypot(q[0] - mx, q[1] - my); if (dd < bd) { bd = dd; c = secOf(p); } }
     if (canDeployIn(c)) { selCol = c; renderMenu(); }
-    else $('sectorInfo').innerHTML = `The <b>${secName(c)}</b> sector is not in ${TEAM_NAME[ALLY]} hands: you can only deploy where the ${SIDE_PL[ALLY]} hold a point.`;
+    else $('sectorInfo').innerHTML = `The <b>${secName(c)}</b> sector is not in ${TEAM_NAME[me.team]} hands: you can only deploy where the ${SIDE_PL[me.team]} hold a point.`;
   });
   $('helpCampaign').innerHTML = TH.help;
   $('resetLink').onclick = () => { if (confirm('Start again from scratch? Every unlock, credit and the campaign map is lost.')) { Account.reset(); location.reload(); } };

@@ -1,8 +1,14 @@
 # Frontline 1944 game server
 
 One container that serves the game and runs multiplayer battles. Players open its address in a browser, pick
-**Play together** on the campaign menu, and either host a battle (they get a four-letter code to read out) or join
-one with a code. Everyone fights on the Allied side against the computer. Single player keeps working offline.
+**Play together** on the campaign menu, and either host a battle or join one with its code. The host can pick the
+code (3 to 8 letters or numbers) or let the server make one up. Single player keeps working offline.
+
+- **Co-op**: everyone fights for the Allies against the computer.
+- **Versus**: players split between the Allies and the Axis (new players start on the smaller side, and can change
+  sides while they are not in a vehicle); the computer fills out both armies.
+
+Players' vehicles carry name tags in their side's colour; names can be changed from the menu during a battle.
 
 ## Where the image comes from
 

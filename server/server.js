@@ -33,26 +33,31 @@ const server = http.createServer((req, res) => {
 // ---------------------------------------------------------------- rooms
 const rooms = new Map();
 const CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ';          // no I or O: easy to read out loud
+const CODE_RE = /^[A-Z0-9]{3,8}$/;                       // a code the host picks: 3 to 8 letters and digits
 function newCode() {
   for (let n = 0; n < 1000; n++) { let c = ''; for (let i = 0; i < 4; i++) c += CODE_CHARS[crypto.randomInt(CODE_CHARS.length)]; if (!rooms.has(c)) return c; }
   return null;
 }
 // start a battle; ready(room) once its map is built, or fail(text)
 function makeRoom(o, ready, fail) {
-  const code = newCode(); if (!code) return fail('The server is full right now.');
+  const want = String(o.code || '').toUpperCase().trim();
+  if (want && !CODE_RE.test(want)) return fail('A battle code is 3 to 8 letters or numbers.');
+  if (want && rooms.has(want)) return fail(`The code ${want} is already in use. Pick another one.`);
+  const code = want || newCode(); if (!code) return fail('The server is full right now.');
+  const mode = o.mode === 'pvp' ? 'pvp' : 'coop';
   const map = o.map && typeof o.map === 'object' && FRONTS.includes(o.map.base) && o.map.id ? o.map : null;
   const front = map ? 'map-' + map.id : FRONTS.includes(o.front) ? o.front : 'eu';
   const t0 = Date.now();
-  const worker = new Worker(path.join(__dirname, 'battle.js'), { workerData: { root: ROOT, front: map ? map.base : front, map, tiers: o.tiers || null, owners: Array.isArray(o.owners) ? o.owners : null } });
-  const room = { code, key: crypto.randomBytes(12).toString('hex'), worker, front, map, clients: new Map(), pending: new Map(), emptySince: Date.now(), overAt: 0, ok: false };
+  const worker = new Worker(path.join(__dirname, 'battle.js'), { workerData: { root: ROOT, front: map ? map.base : front, map, mode, tiers: o.tiers || null, owners: Array.isArray(o.owners) ? o.owners : null } });
+  const room = { code, mode, key: crypto.randomBytes(12).toString('hex'), worker, front, map, clients: new Map(), pending: new Map(), emptySince: Date.now(), overAt: 0, ok: false };
   rooms.set(code, room);
   worker.on('message', m => {
-    if (m.t === 'ready') { room.ok = true; log(`room ${code} opened: ${front} (map built in ${Date.now() - t0} ms)`); ready(room); }
+    if (m.t === 'ready') { room.ok = true; log(`room ${code} opened: ${front}, ${mode} (map built in ${Date.now() - t0} ms)`); ready(room); }
     else if (m.t === 'packets') { for (const [cid, data] of m.out) { const c = room.clients.get(cid); if (c && c.ws.readyState === 1 && c.ws.bufferedAmount < 2e6) c.ws.send(data); } }
     else if (m.t === 'joined') {
       const c = room.pending.get(m.cid); room.pending.delete(m.cid); if (!c) return;
       room.clients.set(m.cid, c); c.name = m.name;
-      send(c.ws, { t: 'welcome', code, id: m.id, team: m.team, host: m.host, startOwned: m.startOwned, players: room.clients.size });
+      send(c.ws, { t: 'welcome', code, id: m.id, team: m.team, host: m.host, mode: m.mode, startOwned: m.startOwned, players: room.clients.size });
       for (const o of room.clients.values()) if (o !== c) send(o.ws, { t: 'note', text: `${m.name} joined the battle` });
       log(`room ${code}: ${m.name} joined (${room.clients.size} playing)`);
     }
