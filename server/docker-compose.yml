@@ -1,7 +1,9 @@
 # Frontline 1944 game server, using the image GitHub builds on every push (see .github/workflows/server-image.yml).
 #   Start / update:   docker compose -f server/docker-compose.yml pull && docker compose -f server/docker-compose.yml up -d
-# Caddy reaches it over a shared Docker network as frontline1944:8080, so no port is published on the host.
-# Set the network name below to the one your Caddy container is on (docker network ls).
+# This runs the game as its own compose project. The simpler way is to add the service to Caddy's compose file
+# (see server/README.md). Here Caddy reaches it over Caddy's Docker network as frontline1944:8080, so no port is
+# published on the host. Set the network name below to Caddy's network as docker network ls shows it: a compose
+# project's network is usually its folder name plus _default, such as caddy_default. Start Caddy first.
 services:
   frontline1944:
     image: ghcr.io/scottjahn/frontline1944:latest
@@ -15,4 +17,4 @@ services:
 networks:
   caddy:
     external: true
-    name: caddy
+    name: caddy_default

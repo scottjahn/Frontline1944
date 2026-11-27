@@ -18,15 +18,29 @@ access token that has the `read:packages` scope:
 echo <token> | docker login ghcr.io -u scottjahn --password-stdin
 ```
 
-## Run it next to Caddy
+## Run it in Caddy's compose file
 
-The compose file joins the container to Caddy's Docker network, so Caddy reaches it as `frontline1944:8080` and no
-port is opened on the host. Check the network name with `docker network ls` and set it in
-`server/docker-compose.yml` (it says `caddy`). Then:
+Add the game as one more service in the `docker-compose.yml` that already runs Caddy. Services in one compose file
+share a network, so Caddy reaches the game as `frontline1944:8080` and no port is opened on the host:
+
+```yaml
+services:
+  caddy:
+    # ... your existing Caddy service, unchanged ...
+
+  frontline1944:
+    image: ghcr.io/scottjahn/frontline1944:latest
+    container_name: frontline1944
+    restart: unless-stopped
+    environment:
+      - MAX_ROOMS=6
+```
+
+Then, in that folder:
 
 ```sh
-docker compose -f server/docker-compose.yml pull
-docker compose -f server/docker-compose.yml up -d
+docker compose pull frontline1944
+docker compose up -d
 ```
 
 In the Caddyfile:
@@ -45,18 +59,25 @@ copy works too: type `frontline.goonlab.opik.net` once into *Game server* on the
 
 ## Updating
 
-Pull the new image and restart; rooms in progress end, so do it when nobody is playing:
+Pull the new image and restart the game; rooms in progress end, so do it when nobody is playing. In Caddy's
+compose folder:
 
 ```sh
-docker compose -f server/docker-compose.yml pull && docker compose -f server/docker-compose.yml up -d
+docker compose pull frontline1944 && docker compose up -d frontline1944
 ```
 
-To do it automatically every night at 4 am, add this to the host's crontab (`crontab -e`), with the path to where
-the compose file is:
+Naming the service updates only the game and leaves Caddy as it is. To do it automatically every night at 4 am,
+add this to the host's crontab (`crontab -e`), with the path to Caddy's compose folder:
 
 ```
-0 4 * * * cd /path/to/frontline && docker compose -f server/docker-compose.yml pull -q && docker compose -f server/docker-compose.yml up -d
+0 4 * * * cd /path/to/caddy && docker compose pull -q frontline1944 && docker compose up -d frontline1944
 ```
+
+## Running it on its own instead
+
+`server/docker-compose.yml` in this repository runs the game as a separate compose project that joins Caddy's
+network from outside. Set `name:` under `networks` to Caddy's network as `docker network ls` shows it (a compose
+project's network is usually its folder name plus `_default`, such as `caddy_default`), and start Caddy first.
 
 ## Settings
 
