@@ -124,6 +124,17 @@
   .netlist div { display:flex; justify-content:space-between; gap:12px; background:rgba(30,36,28,.92); border-left:4px solid var(--ally); border-radius:3px; padding:6px 10px; font-size:13px; }
   .netlist div.axis { border-left-color:var(--axis); }
   .netlist span { color:#a9a58e; font-size:12px; }
+  .netpick { display:flex; flex-direction:column; gap:3px; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#a9a58e; flex:none; }
+  .netpick select { background:#141a12; color:#f4f1e2; border:1px solid var(--line); border-radius:3px; padding:8px 6px; font:inherit; font-size:13px; letter-spacing:0; text-transform:none; }
+  .warN { display:flex; align-items:center; gap:6px; margin-top:8px; flex-wrap:wrap; }
+  .warN span { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--amber); margin-right:4px; }
+  .warN .tab { flex:none; min-width:38px; padding:6px 10px; }
+  #scores { margin-top:8px; display:grid; grid-template-columns:10px 1fr auto; gap:3px 7px; align-items:center; font-size:12px; font-variant-numeric:tabular-nums; }
+  #scores i { width:10px; height:10px; border-radius:2px; border:1px solid rgba(0,0,0,.6); }
+  #scores span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#d8d4c2; }
+  #scores span.me { color:var(--amber); font-weight:700; }
+  #scores b { color:#f4f1e2; }
+  body.compact #scores { font-size:10px; gap:1px 5px; }
   #nameRow { display:flex; align-items:center; gap:10px; margin:10px 0 0; flex-wrap:wrap; font-size:13px; }
   #nameRow span { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:#a9a58e; }
   #nameRow input { background:rgba(30,36,28,.92); border:1px solid var(--line); border-radius:4px; color:var(--amber); font:inherit; font-weight:800; font-size:15px; padding:6px 10px; width:190px; -webkit-user-select:text; user-select:text; }
@@ -203,6 +214,7 @@
     <div class="lbl">War chest</div>
     <div id="money">$0</div>
     <div id="battle"></div>
+    <div id="scores" style="display:none"></div>
     <div id="income"></div>
     <div id="season"></div>
     <div id="seasonDesc"></div>

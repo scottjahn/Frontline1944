@@ -6,10 +6,12 @@
 //  they do comes in through each player's ctl (see controlUnit).
 // ====================================================================
 const units = [], projs = [];
-let time = 0, uid = 0, battleT = BATTLE_LEN, battleOver = false, raidT = 28, crewT = 6, capT = 0, incomeT = INCOME_PERIOD, frontVer = 0;
-let startOwned = [0, 0];
-const teamAI = [{ budget: 250, timer: 6 }, { budget: 250, timer: 4 }];
-const plots = [[], []];
+let time = 0, uid = 0, battleT = WAR ? 600 : BATTLE_LEN, battleOver = false, raidT = 28, crewT = 6, capT = 0, incomeT = INCOME_PERIOD, frontVer = 0;
+let startOwned = TEAMS.map(() => 0);
+const teamAI = TEAMS.map(t => ({ budget: 250, timer: t ? 4 + t % 3 : 6 }));
+const plots = TEAMS.map(() => []);
+// Warlords: each army's score, and headquarters waiting to be rebuilt
+const Score = TEAMS.map(() => 0), hqRebuild = [];
 // the tiers both armies may field (single player: the tiers the player has unlocked)
 const Rules = { tiers: { air: 1, land: 1, sea: 1 } };
 const V = () => new THREE.Vector3();
@@ -42,6 +44,11 @@ function splashFx(pos, size) { TC.set(pos.x, World.water, pos.z); fx(TC, 0xfffff
 function say(team, text, cls) { Out.msg(team, text, cls); }
 function tell(pl, text, cls) { if (pl) Out.tell(pl, text, cls); }
 function tellU(u, text, cls) { if (u && u.ctrl) Out.tell(u.ctrl, text, cls); }
+// everyone but one side (with two sides: the enemy)
+function foesOf(team) { return TEAMS.filter(t => t !== team); }
+function sayFoes(team, text, cls) { for (const t of foesOf(team)) say(t, text, cls); }
+// Warlords: what an army is called in messages, its player's name if a person leads it
+function lord(t) { const p = players.find(q => q.team === t); return p ? `${p.name} (${TEAM_NAME[t]})` : `the ${TEAM_NAME[t]} warlord`; }
 
 // -------------------------------------------------------------- players
 // A player is a person in the battle: their side, the vehicle they command (if any), their war chest and the
@@ -130,6 +137,7 @@ function frontPath() {
 }
 // a point can only be taken by the side that already holds its neighbour (or its own home edge): no leap-frogging
 function canCap(p, team) {
+  if (WAR) return p.home === team || p.from.some(i => POINTS[i].owner === team);    // Warlords: next to a point it holds
   if (p.eng) return team === ALLY ? (p.col === 0 || ENG[p.col - 1].owner === ALLY) : (p.col === ENG.length - 1 ? calaisHeld() : ENG[p.col + 1].owner === AXIS);
   return team === ALLY ? (p.col === 0 || PT(p.col - 1, p.lane).owner === ALLY) : (p.col === COLS - 1 || PT(p.col + 1, p.lane).owner === AXIS);
 }
@@ -182,7 +190,7 @@ function landZone(team, lane, col) {
   return { p: { x: b.x, z: b.z, lane, col: o.col }, assault: true, o };
 }
 // a headquarters can only be hurt once the enemy holds every other capture point on the map (homeland included)
-function hqLeft(team) { return POINTS.filter(p => p.owner !== 1 - team).length; }
+function hqLeft(team) { return WAR ? ownedBy(team) : POINTS.filter(p => p.owner !== 1 - team).length; }
 function hqOpen(team) { return hqLeft(team) === 0; }
 function ownedBy(team) { return POINTS.filter(p => p.owner === team).length; }
 function allyOwned() { return ownedBy(ALLY); }
@@ -219,7 +227,7 @@ function deckLaunch(id, c, slot) {
   return u;
 }
 function launchWing(c) {
-  const id = (c.team === ALLY ? ['p38', 'mustang', 'spitfire'] : ['bf110', 'fw190', 'bf109']).find(i => has(i));
+  const id = (KIT[c.team] === ALLY ? ['p38', 'mustang', 'spitfire'] : ['bf110', 'fw190', 'bf109']).find(i => has(i));
   let n = 0; for (const u of units) if (u.wingOf === c) n++;
   if (n >= 4) { tellU(c, 'The whole air wing is already airborne.'); return false; }
   const k = Math.min(2, 4 - n);
@@ -230,6 +238,7 @@ function launchWing(c) {
 // Where things enter the battle. Combat units arrive just behind their side's front (or behind sector `col` when a
 // player picks one); supply vehicles work from the home base. Aircraft use the home runway, a carrier deck, or arrive airborne.
 function spawnAt(id, team, col) {
+  if (WAR) return warSpawn(id, team, col);
   const d = DEFS[id], b = BASE[team], s = team === ALLY ? 1 : -1, f = FACE[team], ap = AIRPORT[team], rear = !!NONCOMBAT[d.role];
   if (d.domain === 'air') {
     if (rear || col === -1) {             // supply flights, and anyone deploying in the homeland, use the home runway
@@ -263,6 +272,59 @@ function spawnAt(id, team, col) {
   const sp = stage(team, SEA_LANE, col), bv = behind(team, sp.lane, sp.col), q = seaSpot(sp.x, sp.z, 120, 380, bv);
   return spawn(id, team, q[0], q[1], { yaw: Math.atan2(-bv[0], -bv[1]) });
 }
+// Warlords: at the army's base, or at a point it holds (`at`, a point index; -1 = the base). The computer sometimes
+// sends new forces to the held point closest to what it is attacking.
+function warSpawn(id, team, at) {
+  const d = DEFS[id], b = BASE[team], ap = AIRPORT[team], f = FACE[team], rear = !!NONCOMBAT[d.role], l = Math.hypot(b.x, b.z) || 1;
+  const cx = -b.x / l, cz = -b.z / l, inYaw = Math.atan2(cx, cz);          // the way to the middle of the map
+  let p = at >= 0 && POINTS[at] && POINTS[at].owner === team ? POINTS[at] : null;
+  if (!p && at === undefined && !rear) p = warStage(team, d.domain);
+  if (p && (d.domain === 'sea') !== p.sea && d.domain !== 'air') p = null;
+  if (d.domain === 'air') {
+    if (rear || !p) {
+      if (!airportOf(team)) return spawn(id, team, b.x - cx * 700, b.z - cz * 700, { alt: 160 + rnd(0, 40), yaw: inYaw });
+      if (d.heli) { const x = ap.x + 62 + rnd(-6, 6), z = ap.z - 29 + rnd(-6, 6); return spawn(id, team, x, z, { alt: terrainH(x, z) + 2.3 }); }
+      const x = ap.x - f * 150, z = ap.z + rnd(-7, 7);
+      const u = spawn(id, team, x, z, { alt: terrainH(x, z) + (d.gear || 1.5), yaw: f * Math.PI / 2 }); u.takeoff = true; u.speed = 0; return u;
+    }
+    let bx = b.x - p.x, bz = b.z - p.z; const bl = Math.hypot(bx, bz) || 1, r = rnd(600, 1000); bx /= bl; bz /= bl;
+    const x = clamp(p.x + bx * r + rnd(-200, 200), -MAP.x, MAP.x), z = clamp(p.z + bz * r + rnd(-200, 200), -MAP.z, MAP.z);
+    return spawn(id, team, x, z, { alt: d.heli ? ground(x, z) + 60 : 170 + rnd(0, 40), yaw: Math.atan2(p.x - x, p.z - z) });
+  }
+  if (d.domain === 'land') {
+    const q = rear ? landSpot(b.x + cx * 120, b.z + cz * 120, 0, 90) : p ? landSpot(p.x, p.z, 50, 160) : landSpot(b.x + cx * 260, b.z + cz * 260, 0, 140);
+    return spawn(id, team, q[0], q[1], { yaw: inYaw });
+  }
+  const P = p || HOME[team].port, q = seaSpot(P.x, P.z, p ? 120 : 0, p ? 380 : 200);
+  return spawn(id, team, q[0], q[1], { yaw: rear ? HOME[team].dockYaw : Math.atan2(-P.x, -P.z) });
+}
+// the held point (of the right kind) nearest to what the army is going for next; null: start from home
+function warStage(team, dom) {
+  if (Math.random() < 0.4) return null;
+  const sea = dom === 'sea', o = warGoal(team, sea, BASE[team], Math.floor(Math.random() * 100)); if (!o) return null;
+  let best = null, bd = 1e9;
+  for (const p of POINTS) if (p.owner === team && p.sea === sea && p.post) { const dd = Math.hypot(p.x - o.x, p.z - o.z); if (dd < bd) { bd = dd; best = p; } }
+  return best;
+}
+// The point a unit of `team` near `from` should go for: one it may capture and does not hold, the closer the
+// better, with the Citadel worth a longer drive. seed spreads a side's units over several goals.
+function warGoal(team, sea, from, seed) {
+  let best = null, bs = 1e9;
+  for (const p of POINTS) {
+    if (p.sea !== sea || p.owner === team || !canCap(p, team)) continue;
+    let s = Math.hypot(p.x - from.x, p.z - from.z) / (p.cit ? 1.7 : 1) * (1 + ((seed * 7 + p.i * 13) % 10) / 9);
+    if (p.home === team) s *= 0.5;                        // our own Keep or Roads: take it back first
+    if (s < bs) { bs = s; best = p; }
+  }
+  return best;
+}
+// a point the side already holds, to guard when there is nothing to take (spread by seed)
+function warHold(team, sea, seed) {
+  const own = POINTS.filter(p => p.sea === sea && p.owner === team);
+  if (!own.length) return sea ? HOME[team].port : BASE[team];
+  const cit = own.filter(p => p.cit);
+  return (cit.length && seed % 3 ? cit : own)[seed % (cit.length && seed % 3 ? cit.length : own.length)];
+}
 // taken out of the battle without a fight (flew home, shipped out, a player's old vehicle withdrawn): no wreck
 function despawn(u) {
   u.dead = true; const i = units.indexOf(u); if (i >= 0) units.splice(i, 1);
@@ -272,7 +334,7 @@ function airlift(team, ids) {
   const lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane), bv = behind(team, sp.lane, sp.col), lz = landZone(team, lane);
   const q = lz.assault ? landSpot(lz.p.x, lz.p.z, 0, 90) : landSpot(sp.x, sp.z, 60, 220, bv);
   const cx = v => clamp(v, -MAP.x - 100, MAP.x + 100), cz = v => clamp(v, -MAP.z - 100, MAP.z + 100);
-  const u = spawn(team === ALLY ? 'c54' : 'me323', team, cx(q[0] + bv[0] * 1700), cz(q[1] + bv[1] * 1700), { alt: 190, yaw: Math.atan2(-bv[0], -bv[1]) });
+  const u = spawn(KIT[team] === ALLY ? 'c54' : 'me323', team, cx(q[0] + bv[0] * 1700), cz(q[1] + bv[1] * 1700), { alt: 190, yaw: Math.atan2(-bv[0], -bv[1]) });
   u.cargo = ids; u.dropLane = lane; u.dropPt = V().set(q[0], terrainH(q[0], q[1]) + 100, q[1]);
   u.exitPt = V().set(cx(q[0] + bv[0] * 2600 + rnd(-300, 300)), 230, cz(q[1] + bv[1] * 2600 + rnd(-300, 300)));
   return u;
@@ -292,7 +354,7 @@ function sealift(team, ids, to, from) {
   const b = beachNear(to.x, to.z), n = b.n; let sx, sz;
   if (from) { const f = beachNear(from.x, from.z), q = seaSpot(f.x - f.n[0] * 200, f.z - f.n[1] * 200, 0, 120); sx = q[0]; sz = q[1]; }
   else { let k = 900; while (k > 200 && sdf(b.x - n[0] * k, b.z - n[1] * k) > -100) k -= 100; sx = b.x - n[0] * k; sz = b.z - n[1] * k; }
-  const u = spawn(team === ALLY ? 'lst' : 'mfp', team, sx, sz, { yaw: Math.atan2(b.x - sx, b.z - sz) });
+  const u = spawn(KIT[team] === ALLY ? 'lst' : 'mfp', team, sx, sz, { yaw: Math.atan2(b.x - sx, b.z - sz) });
   u.cargo = ids; u.landLane = to.eng ? ENG_LANE : to.lane === 0 ? 0 : 1;
   u.beach = { x: b.x - n[0] * 50, z: b.z - n[1] * 50 }; u.landPt = { x: b.x + n[0] * 35, z: b.z + n[1] * 35 }; u.exit = { x: sx, z: sz };
   return u;
@@ -305,12 +367,13 @@ function unload(u) {
 }
 function requisition(id, team) {
   const d = DEFS[id];
+  if (WAR) return spawnAt(id, team);
   if (d.domain !== 'land' || d.role === 'cargo') return spawnAt(id, team);
   const landers = units.filter(u => u.team === team && u.def.role === 'lander').length;
   if (team === AXIS && invasionOpen() && landers < 2 && Math.random() < 0.3) return ferry([id, 'grenadier']);        // invade the Allied homeland
   if (team === ALLY && engThreat() && Math.random() < 0.45) return spawnAt(id, team, -1);                           // home forces turn out to meet them
   if (Math.random() < 0.3 && !landers)
-    return sealift(team, [id].concat(team === ALLY ? ['troops', 'jeep'] : ['grenadier', 'kubel']));
+    return sealift(team, [id].concat(KIT[team] === ALLY ? ['troops', 'jeep'] : ['grenadier', 'kubel']));
   return airlift(team, [id]);
 }
 
@@ -547,7 +610,7 @@ function nukeBlast(p) {
     if (dd < R) damage(u, p.dmg * (1 - dd / R) * (u.def.model === 'hq' ? 0.35 : 1), p.owner, p.pl);
   }
   say(p.team, 'ATOMIC BOMB DETONATED. Everything beneath it is gone.', 'gold');
-  say(1 - p.team, `The ${SIDE_PL[p.team]} have dropped an atomic bomb!`, 'bad');
+  sayFoes(p.team, `The ${SIDE_PL[p.team]} have dropped an atomic bomb!`, 'bad');
 }
 function impact(p, hit, th) {
   if (p.kind === 'nuke') { nukeBlast(p); return; }
@@ -573,8 +636,13 @@ function impact(p, hit, th) {
 function bountyOf(d) { return d.model === 'hq' ? 2000 : Math.round(Math.max(40, (d.aiCost || d.cost || 300) * 0.3) / 5) * 5; }
 function damage(u, amt, att, pl) {
   if (u.dead) return;
-  if (u.def.model === 'hq' && !hqOpen(u.team)) {
-    if (pl && time - pl.hqMsgT > 8) { pl.hqMsgT = time; tell(pl, `The ${TEAM_NAME[u.team]} headquarters is out of reach until every other point is taken (${hqLeft(u.team)} still to go).`, 'bad'); }
+  if (u.def.model === 'hq' && (!hqOpen(u.team) || u.shieldT > time)) {
+    if (pl && time - pl.hqMsgT > 8) {
+      pl.hqMsgT = time;
+      tell(pl, u.shieldT > time ? `The ${TEAM_NAME[u.team]} headquarters has just been rebuilt and cannot be hurt yet.`
+        : WAR ? `The ${TEAM_NAME[u.team]} headquarters is out of reach while its warlord holds any point (${hqLeft(u.team)} still held).`
+          : `The ${TEAM_NAME[u.team]} headquarters is out of reach until every other point is taken (${hqLeft(u.team)} still to go).`, 'bad');
+    }
     return;
   }
   if (!pl) amt *= 0.45;            // AI gunnery is weaker than the players': keeps the war from burning out
@@ -583,12 +651,12 @@ function damage(u, amt, att, pl) {
   if (u.ctrl) Out.hurt(u.ctrl);
   if (u.def.domain === 'sea' && !u.ctrl && !u.rolled && u.hp < u.maxHp * 0.25) {
     u.rolled = true;
-    if (Math.random() < 0.38) { defect(u, pl); return; }
+    if (Math.random() < 0.38 && (!WAR || (pl && pl.team !== u.team))) { defect(u, pl); return; }
   }
   if (u.hp <= 0) kill(u, att, pl);
 }
 function defect(u, pl) {
-  const old = u.team; u.team = 1 - old;
+  const old = u.team; u.team = WAR ? pl.team : 1 - old;
   u.hp = Math.max(u.hp, u.maxHp * 0.4); u.target = null; u.aaTarget = null; u.route = null; u.patrol = null;
   TC.copy(u.pos).setY(u.pos.y + 14); fx(TC, 0xffffff, 3, 16, 1.2, 4, 0.7);
   for (const p of teamPlayers(u.team)) p.stats.defect++;
@@ -599,17 +667,36 @@ function defect(u, pl) {
 function kill(u, att, pl) {
   if (u.dead) return;
   u.dead = true; const i = units.indexOf(u); if (i >= 0) units.splice(i, 1);
-  const d = u.def, foe = 1 - u.team;
+  // foe: the side that gets the credit (Warlords: whoever fired the shot; -1 nobody)
+  const d = u.def, foe = WAR ? (pl ? pl.team : att && att.team !== undefined ? att.team : -1) : 1 - u.team;
   explode(centerOf(u, TA), d.len ? d.len * 0.45 : d.radius * 2.4);
   const b = bountyOf(d);
   if (pl && pl.team === foe) { const cr = Math.max(10, Math.round(b * 0.4 / 5) * 5); pl.money += b; pl.stats.kills++; pl.stats.credits += cr; pl.stats.killCr += cr; tell(pl, `Destroyed ${d.name}  +$${b} · +${cr} credits`, 'gold'); }
-  else teamAI[foe].budget += b * 0.5;
+  else if (foe >= 0) teamAI[foe].budget += b * 0.5;
+  if (WAR && foe >= 0 && foe !== u.team) Score[foe] += u.ctrl ? 15 : d.model === 'hq' ? 0 : d.domain === 'bld' ? 3 : NONCOMBAT[d.role] ? 1 : 2;
   if (d.domain === 'bld') say(u.team, `We lost a ${d.name}!`, 'bad');
   Out.killed(u);
   if (d.domain === 'bld') { const pl_ = plots[u.team].find(p => p.unit === u); if (pl_) { pl_.unit = null; pl_.rubble = u.id; } const cp = POINTS.find(p => p.post === u); if (cp) cp.rubble = u.id; }
   if (u.ctrl) { const p = u.ctrl; if (p.unit === u) p.unit = null; Out.died(p, u); tell(p, 'Your vehicle was destroyed.', 'bad'); }
-  if (d.model === 'hq') endBattle(foe);
+  if (d.model === 'hq') { if (WAR) hqSacked(u, foe); else endBattle(foe); }
 }
+// Warlords: a sacked headquarters scores big for whoever did it, and is rebuilt a minute later
+function hqSacked(u, foe) {
+  const t = u.team;
+  if (foe >= 0 && foe !== t) { Score[foe] += 100; say(foe, `We sacked the ${TEAM_NAME[t]} headquarters! +100 score`, 'gold'); Out.banner(foe, 'Headquarters sacked', `${lord(t)} is reeling`); }
+  Out.banner(t, 'Our headquarters is sacked', 'It will be rebuilt in a minute. Take back your Keep!');
+  for (const o of TEAMS) if (o !== t && o !== foe) say(o, `${foe >= 0 ? lord(foe) : 'Someone'} sacked the headquarters of ${lord(t)}`, '');
+  hqRebuild.push({ team: t, at: time + 60, x: u.pos.x, z: u.pos.z, yaw: u.yaw, wreck: u.id });
+}
+function warTick() {
+  for (let i = hqRebuild.length - 1; i >= 0; i--) {
+    const r = hqRebuild[i]; if (time < r.at) continue;
+    hqRebuild.splice(i, 1); Out.clearWreck(r.wreck);
+    const u = spawn('hq', r.team, r.x, r.z, { yaw: r.yaw, build: true }); u.shieldT = time + 90;
+    say(r.team, 'Our headquarters has been rebuilt.', 'good');
+  }
+}
+function leader() { let w = 0; for (const t of TEAMS) if (Score[t] > Score[w]) w = t; return w; }
 
 // -------------------------------------------------------------- AI
 function weight(d, e) {
@@ -671,6 +758,11 @@ function setBreak(u, t, dist, alt, jink) {
 }
 function patrolPoint(u) {
   const d = u.def, cx = v => clamp(v, -MAP.x * 0.95, MAP.x * 0.95), cz = v => clamp(v, -MAP.z * 0.95, MAP.z * 0.95);
+  if (WAR) {                           // somewhere worth fighting over: a point to take, or one of our own
+    const sea = d.role === 'torpedo', o = Math.random() < 0.7 ? warGoal(u.team, sea, u.pos, u.id + Math.floor(time / 30)) : null, q = o || warHold(u.team, sea, u.id);
+    const x = cx(q.x + rnd(-500, 500)), z = cz(q.z + rnd(-500, 500));
+    return V().set(x, d.role === 'bomber' ? 190 : sea ? 100 : ground(x, z) + rnd(110, 200), z);
+  }
   if (d.role === 'torpedo') { const f = frontPos(SEA_LANE); return V().set(cx(f.x + rnd(-900, 900)), 100, cz(f.z + rnd(-700, 700))); }
   const lane = Math.floor(Math.random() * LANES);
   if (d.role === 'bomber') { const sp = stage(u.team, lane); return V().set(sp.x + rnd(-300, 300), 190, sp.z + rnd(-300, 300)); }
@@ -777,6 +869,12 @@ function aiLand(u, dt) {
     if (Math.hypot(gx - u.pos.x, gz - u.pos.z) < 35) { if (r.i === 0 && r.loaded) { deliver(u); r.loaded = false; } if (r.i === 1) r.loaded = true; r.i = 1 - r.i; }
   }
   else {                               // advance on this lane's objective and hold it
+    if (WAR) {
+      const jx = (u.id % 5 - 2) * 30, jz = ((u.id >> 2) % 5 - 2) * 30;
+      if (!u.goal || u.goal.owner === u.team || !canCap(u.goal, u.team) || time > (u.goalT || 0)) { u.goal = warGoal(u.team, false, u.pos, u.id); u.goalT = time + 20; }
+      const o = u.goal || warHold(u.team, false, u.id);
+      gx = o.x + jx * (u.goal ? 1 : 2); gz = o.z + jz * (u.goal ? 1 : 2); stop = u.goal ? 20 : 40;
+    } else {
     if (u.lane === undefined) { let bd = 1e9; for (const p of POINTS) if (!p.sea) { const dd = Math.hypot(p.x - u.pos.x, p.z - u.pos.z); if (dd < bd) { bd = dd; u.lane = p.lane; } } }
     const jx = (u.id % 5 - 2) * 30, jz = ((u.id >> 2) % 5 - 2) * 30, eng = u.lane === ENG_LANE;
     const o = eng ? engObjective(u.team) : reach(u.team, u.lane);
@@ -788,6 +886,7 @@ function aiLand(u, dt) {
     if (TH.islands) {
       if (!garrison(u, dt, jx, jz, gx, gz)) return;
       if (u.hold) { gx = u.hold.x; gz = u.hold.z; stop = u.hold.stop; }
+    }
     }
   }
   const dist = Math.hypot(gx - u.pos.x, gz - u.pos.z);
@@ -845,7 +944,7 @@ function aiSea(u, dt) {
   } else {
     if (d.sub) u.diveT = 0;
     if (!u.patrol || hdist(u.pos, u.patrol) < 90) {   // hold the contested sea point; with the sea lane won, blockade the enemy port
-      const o = reach(u.team, SEA_LANE) || homeSpot(1 - u.team, SEA_LANE), q = seaSpot(o.x, o.z, 0, 260);
+      const o = WAR ? warGoal(u.team, true, u.pos, u.id + Math.floor(time / 40)) || warHold(u.team, true, u.id) : reach(u.team, SEA_LANE) || homeSpot(1 - u.team, SEA_LANE), q = seaSpot(o.x, o.z, 0, 260);
       u.patrol = V().set(q[0], 0, q[1]);
     }
     gx = u.patrol.x; gz = u.patrol.z; u.aimYaw = u.yaw;
@@ -952,37 +1051,41 @@ function commander(team, dt) {
   const ai = teamAI[team];
   let own = 0, foe = 0;
   for (const u of units) if (u.def.domain !== 'bld') { if (u.team === team) own++; else foe++; }
+  foe /= NTEAMS - 1;                     // Warlords: measured against the average rival
   // the losing side gets reinforcements faster, so the front line keeps moving both ways
-  ai.budget += dt * (9 + incomeOf(team) / INCOME_PERIOD * (team === AXIS ? 1 : 0.5)) * clamp((foe + 4) / (own + 4), 0.8, 2.2);
+  ai.budget += dt * (9 + incomeOf(team) / INCOME_PERIOD * (WAR ? 0.75 : team === AXIS ? 1 : 0.5)) * clamp((foe + 4) / (own + 4), 0.8, 2.2);
   ai.timer -= dt; if (ai.timer > 0) return; ai.timer = rnd(4, 8);
-  if (team === AXIS && Math.random() < 0.22) {
+  if ((WAR ? !teamPlayers(team).length : team === AXIS) && Math.random() < 0.22) {
     const id = ['house', 'factory', 'aagun'][Math.floor(Math.random() * 3)];
     if (ai.budget >= DEFS[id].cost + 200 && build(team, id)) ai.budget -= DEFS[id].cost;
     return;
   }
   let mobile = 0;
   for (const u of units) if (u.team === team && u.def.domain !== 'bld') mobile++;
-  if (mobile >= UNIT_CAP) return;
-  const list = ROSTER[team].filter(i => has(i)), id = list[Math.floor(Math.random() * list.length)], d = DEFS[id], c = d.aiCost || d.cost;
+  if (mobile >= teamCap()) return;
+  const list = ROSTER[KIT[team]].filter(i => has(i)), id = list[Math.floor(Math.random() * list.length)], d = DEFS[id], c = d.aiCost || d.cost;
   if (d.max && units.filter(u => u.team === team && u.def === d).length >= d.max) return;
   if (c <= ai.budget) { ai.budget -= c; requisition(id, team); }
 }
+// how many vehicles each side's commander keeps in the field (Warlords: shared out between the armies)
+function teamCap() { return WAR ? Math.round(clamp(100 / NTEAMS, 12, UNIT_CAP)) : UNIT_CAP; }
 function raids(dt) {
+  if (WAR) return;
   raidT -= dt; if (raidT > 0) return; raidT = rnd(26, 44);
   const team = Math.random() < 0.5 ? ALLY : AXIS, cx = v => clamp(v, -MAP.x - 100, MAP.x + 100), cz = v => clamp(v, -MAP.z - 100, MAP.z + 100);
-  const bid = team === ALLY ? 'b25' : 'ju88', tid = team === ALLY ? 'avenger' : 'fi167';
+  const bid = KIT[team] === ALLY ? 'b25' : 'ju88', tid = KIT[team] === ALLY ? 'avenger' : 'fi167';
   if (Math.random() < 0.45 && has(bid)) {          // level-bomber formation crossing the front from its own rear
     const lane = Math.random() < 0.5 ? 0 : 1, sp = stage(team, lane), bv = behind(team, sp.lane, sp.col), f = frontPos(lane), yaw = Math.atan2(-bv[0], -bv[1]);
     for (let i = 0; i < 3; i++) spawn(bid, team, cx(f.x + bv[0] * (2300 + i * 45) - bv[1] * (i - 1) * 55), cz(f.z + bv[1] * (2300 + i * 45) + bv[0] * (i - 1) * 55), { alt: 210, raid: true, yaw });
     say(team, `${TEAM_NAME[team]} bomber formation crossing the front!`, 'good');
-    say(1 - team, `WARNING: ${TEAM_NAME[team]} bomber formation inbound!`, 'bad');
+    sayFoes(team, `WARNING: ${TEAM_NAME[team]} bomber formation inbound!`, 'bad');
     return;
   }
   if (!has(tid) || !units.some(u => u.team !== team && u.def.domain === 'sea')) return;
   const sp = stage(team, SEA_LANE), bv = behind(team, sp.lane, sp.col), f = frontPos(SEA_LANE), r = rnd(1100, 1700), n = 2 + (Math.random() < 0.4 ? 1 : 0);
   for (let i = 0; i < n; i++) spawn(tid, team, cx(f.x + bv[0] * r - bv[1] * i * 40), cz(f.z + bv[1] * r + bv[0] * i * 40), { alt: 110, yaw: Math.atan2(-bv[0], -bv[1]), raid: true });
   say(team, `${TEAM_NAME[team]} torpedo bombers inbound over the sea!`, 'good');
-  say(1 - team, `WARNING: ${TEAM_NAME[team]} torpedo bombers hunting our ships!`, 'bad');
+  sayFoes(team, `WARNING: ${TEAM_NAME[team]} torpedo bombers hunting our ships!`, 'bad');
 }
 // ---- capture points: destroy the command post, then hold the ground (or the water) to take the point
 function setOwner(p, team) {
@@ -996,41 +1099,62 @@ function setupPoints() {
     p.y = p.sea ? 0 : terrainH(p.x, p.z);
     if (p.owner >= 0) p.post = spawn(p.sea ? 'seafort' : 'outpost', p.owner, p.x, p.z, { yaw: 0 });
   }
-  startOwned = [ownedBy(ALLY), ownedBy(AXIS)]; frontVer++;
+  startOwned = TEAMS.map(ownedBy); frontVer++;
 }
 // byPl: the player who led the capture, if any
 function capture(p, team, byPl) {
   if (p.rubble) { Out.clearWreck(p.rubble); p.rubble = null; }
   setOwner(p, team);
   p.post = spawn(p.sea ? 'seafort' : 'outpost', team, p.x, p.z, { build: true, yaw: 0 });
-  const paid = byPl && byPl.team === team;
+  const paid = byPl && byPl.team === team, lost = p.lost; p.lost = -1;
   for (const pl of teamPlayers(team)) pl.stats.caps++;
   if (paid) { byPl.stats.credits += 250; byPl.stats.capCr += 250; byPl.money += 400; }
+  if (WAR) {
+    Score[team] += 10;
+    Out.banner(team, p.name + (p.home === team ? ' retaken' : ' captured'), p.cit ? 'The Citadel scores fastest of all: hold it!' : TH.str.advance);
+    say(team, `${p.name} is ours!  +10 score` + (paid ? ' · +$400 · +250 credits' : ''), 'gold');
+    if (lost >= 0 && lost !== team) Out.banner(lost, p.name + ' lost', `Taken by ${lord(team)}`);
+    for (const t of TEAMS) if (t !== team) say(t, `${lord(team)} has taken ${p.name}`, t === lost ? 'bad' : '');
+    return;
+  }
   const engSub = team === ALLY ? 'The invaders are pushed back toward the sea' : `The invasion of ${HOME_NAME} advances`;
   Out.banner(team, p.name + (p.eng && team === ALLY ? ' retaken' : ' captured'), p.eng ? engSub : TH.str.advance);
   say(team, `${p.name} is ours!` + (paid ? '  +$400 · +250 credits' : ''), 'gold');
   Out.banner(1 - team, p.name + ' lost', p.eng ? engSub : TH.str.retreat);
-  say(1 - team, `The ${SIDE_PL[team]} have taken ${p.name}!`, 'bad');
+  sayFoes(team, `The ${SIDE_PL[team]} have taken ${p.name}!`, 'bad');
 }
 function updatePoints(dt) {
   capT -= dt; if (capT > 0) return; capT = 0.5;
+  if (WAR) for (const p of POINTS) if (p.owner >= 0 && p.post) Score[p.owner] += p.cit ? 0.5 : 0.1;     // Citadel 1 a second, others 0.2
   for (const p of POINTS) {
     if (p.post && p.post.dead) {
-      const old = p.owner; p.post = null; setOwner(p, -1);
-      say(1 - old, `${p.name}: ${TEAM_NAME[old]} command post destroyed. Move in and hold it!`, 'good');
+      const old = p.owner; p.post = null; setOwner(p, -1); p.lost = old;
+      sayFoes(old, `${p.name}: ${TEAM_NAME[old]} command post destroyed. Move in and hold it!`, 'good');
       say(old, `${p.name}: our command post has fallen! Hold the ground or lose the sector.`, 'bad');
     }
     p.contest = false;
     if (p.post) continue;
-    const R = p.sea ? CAP_R_SEA : CAP_R, n = [0, 0], pc = [null, null];
+    const R = p.sea ? CAP_R_SEA : CAP_R, n = TEAMS.map(() => 0), pc = TEAMS.map(() => null);
     for (const u of units) {
       const d = u.def;
       if (p.sea ? (d.domain !== 'sea' || NONCOMBAT[d.role] || (d.sub && u.dive > 0.5)) : (d.domain !== 'land' || d.role === 'cargo' || u.chute > 0)) continue;
       if (Math.abs(u.pos.x - p.x) > R || Math.hypot(u.pos.x - p.x, u.pos.z - p.z) > R) continue;
       n[u.team]++; if (u.ctrl) pc[u.team] = u.ctrl;
     }
-    p.contest = n[0] > 0 && n[1] > 0;
     const step = 0.5 / 28;             // one unit takes 28 s; three or more take about 9 s
+    if (WAR) {                         // one army alone on a point wears down anyone else's progress, then builds its own
+      let k = 0, who = -1; for (const t of TEAMS) if (n[t]) { k++; who = t; }
+      p.contest = k > 1;
+      if (k === 1 && canCap(p, who)) {
+        const s = step * Math.min(n[who], 3);
+        if (p.by !== who && p.prog > 0) p.prog = Math.max(0, p.prog - s);
+        else { p.by = who; p.prog += s; if (pc[who]) p.plCap = pc[who]; }
+      } else if (!k) { p.prog = Math.max(0, p.prog - step * 0.5); }
+      if (!p.prog) p.by = -1;
+      if (p.prog >= 1) { capture(p, p.by, p.plCap); p.plCap = null; p.by = -1; }
+      continue;
+    }
+    p.contest = n[0] > 0 && n[1] > 0;
     if (n[0] && !n[1] && canCap(p, ALLY)) { p.prog += step * Math.min(n[0], 3); if (pc[0]) p.plCap = pc[0]; }
     else if (n[1] && !n[0] && canCap(p, AXIS)) { p.prog -= step * Math.min(n[1], 3); if (pc[1]) p.plCap = pc[1]; }
     else if (!n[0] && !n[1]) p.prog -= Math.sign(p.prog) * Math.min(Math.abs(p.prog), step * 0.5);
@@ -1046,7 +1170,7 @@ const GRIPES = [
 // every few seconds each side's buildings pay its players
 function economy(dt) {
   incomeT -= dt;
-  if (incomeT <= 0) { incomeT = INCOME_PERIOD; const inc = [incomeOf(ALLY), incomeOf(AXIS)]; for (const p of players) p.money += inc[p.team]; }
+  if (incomeT <= 0) { incomeT = INCOME_PERIOD; const inc = TEAMS.map(incomeOf); for (const p of players) p.money += inc[p.team]; }
   if (World.info.rain) { crewT -= dt; if (crewT <= 0) { crewT = rnd(9, 15); say(-1, GRIPES[Math.floor(Math.random() * GRIPES.length)], 'crew'); } }
 }
 
@@ -1080,22 +1204,22 @@ function controlUnit(pl, dt) {
 }
 function plHas(pl, id) { return tierOk(id, pl.tiers) && sideOk(id, pl.team); }
 // a vehicle a side may field: its own (buildings belong to nobody)
-function sideOk(id, team) { const d = DEFS[id]; return !!d && (d.team === undefined || d.team === team); }
+function sideOk(id, team) { const d = DEFS[id]; return !!d && (d.team === undefined || d.team === KIT[team]); }
 // the same kind of vehicle for the other side: the shop lists name the Allied ones; the Axis version is the mirror
 // built from it (null when the Axis has no counterpart)
 const SIDE_IDS = {};
 function sideId(id, team) {
   const d = DEFS[id]; if (!d) return null;
-  if (d.team === undefined || d.team === team) return id;
-  const key = id + '>' + team;
-  if (!(key in SIDE_IDS)) { const m = Object.values(DEFS).find(o => o.team === team && (o.base === id || (d.base && o.id === d.base))); SIDE_IDS[key] = m ? m.id : null; }
+  const k = KIT[team]; if (d.team === undefined || d.team === k) return id;
+  const key = id + '>' + k;
+  if (!(key in SIDE_IDS)) { const m = Object.values(DEFS).find(o => o.team === k && (o.base === id || (d.base && o.id === d.base))); SIDE_IDS[key] = m ? m.id : null; }
   return SIDE_IDS[key];
 }
 // take command of a vehicle (free in any unlocked tier) in sector col. A player's previous own vehicle is withdrawn.
 // Swapping out of a vehicle that is still fighting (a redeploy) has a 20 s cooldown; after losing one there is none.
 function deployPlayer(pl, id, col) {
   if (!DEFS[id] || !plHas(pl, id) || NONCOMBAT[DEFS[id].role] || battleOver) return null;
-  if (col < 0 && pl.team !== ALLY && !POINTS.some(p => p.eng && p.owner === pl.team)) col = COLS - 1;   // only the Allies start in their homeland
+  if (!WAR && col < 0 && pl.team !== ALLY && !POINTS.some(p => p.eng && p.owner === pl.team)) col = COLS - 1;   // only the Allies start in their homeland
   const old = pl.unit, redeploy = !!(old && !old.dead);
   if (redeploy && pl.deployCd > 0) return null;
   const u = spawnAt(id, pl.team, col); u.mine = true; setControl(pl, u);
@@ -1123,9 +1247,9 @@ function buyFor(pl, id, col) {
   if (isB) { const u = build(pl.team, id); if (!u) return false; pl.money -= d.cost; tell(pl, `Construction started: ${d.name}`, 'good'); return true; }
   pl.money -= d.cost;
   if (nc) {
-    if (d.role === 'lander') { sealift(pl.team, d.cargo.slice()); tell(pl, `${d.name} convoy is heading for the beaches`, 'good'); }
+    if (d.role === 'lander') { sealift(pl.team, d.cargo.slice(), WAR ? warGoal(pl.team, false, HOME[pl.team].port, 0) || warHold(pl.team, false, 0) : undefined); tell(pl, `${d.name} convoy is heading for the beaches`, 'good'); }
     else { spawnAt(id, pl.team); tell(pl, `${d.name} has started its supply runs`, 'good'); }
-  } else if (d.domain === 'land') { airlift(pl.team, [id]); tell(pl, `${d.name} is being flown in by cargo plane`, 'good'); }
+  } else if (d.domain === 'land' && !WAR) { airlift(pl.team, [id]); tell(pl, `${d.name} is being flown in by cargo plane`, 'good'); }
   else { spawnAt(id, pl.team, col); tell(pl, `${d.name} has joined the fight`, 'good'); }
   return true;
 }
@@ -1134,9 +1258,30 @@ function buyFor(pl, id, col) {
 // A battle ends when the clock runs out, when it is called off, or when a headquarters falls (winner: that side).
 function endBattle(winner) {
   if (battleOver) return; battleOver = true;
+  if (WAR && winner === undefined) winner = leader();
   Out.over(winner);
 }
+// Warlords: every army gets a base like the two campaign sides, and a smaller starting force the more armies there are
+const WAR_START = [
+  ['troops', 'sherman', 'spitfire', 'ward', 'troops', 'jeep', 'truck', 'c47', 'liberty', 'spitfire', 'sherman', 'halftrack', 'pt', 'troops', 'mustang', 'gato', 'truck', 'r4', 'ward', 'atlanta', 'liberty'],
+  ['grenadier', 'panzer4', 'bf109', 'z23', 'grenadier', 'kubel', 'opel', 'ju52', 'freighter', 'bf109', 'panzer4', 'flakwagen', 'sboot', 'grenadier', 'fw190', 'uboat', 'opel', 'fa223', 'z23', 'hipper', 'freighter']
+];
+function setupWar() {
+  setupPoints();
+  for (const team of TEAMS) {
+    const b = BASE[team], l = Math.hypot(b.x, b.z) || 1, cx = -b.x / l, cz = -b.z / l, k = KIT[team];
+    for (let r = 0; r < 4; r++) for (let c = 0; c < 5; c++) plots[team].push({ x: b.x + (c - 2) * 46, z: b.z + (r - 1.5) * 46, unit: null, rubble: null });
+    plots[team].sort((p, q) => Math.hypot(p.x - b.x, p.z - b.z) - Math.hypot(q.x - b.x, q.z - b.z));
+    spawn('hq', team, b.x - cx * 120 - cz * 150, b.z - cz * 120 + cx * 150, { yaw: Math.atan2(cx, cz) });
+    spawn('dock', team, HOME[team].dock.x, HOME[team].dock.z, { yaw: HOME[team].dockYaw });
+    spawn('airport', team, AIRPORT[team].x, AIRPORT[team].z - 45, { yaw: 0 });
+    for (const id of ['factory', 'house', 'house', 'aagun', 'aagun']) build(team, id, true);
+    const basic = k === ALLY ? { air: 'spitfire', land: 'troops', sea: 'ward' } : { air: 'bf109', land: 'grenadier', sea: 'z23' };
+    for (const id of WAR_START[k].slice(0, Math.round(clamp(48 / NTEAMS, 8, 21)))) spawnAt(has(id) ? id : basic[DEFS[id].domain], team);
+  }
+}
 function setupTeams() {
+  if (WAR) return setupWar();
   setupPoints();
   for (const team of [ALLY, AXIS]) {
     const b = BASE[team], s = FACE[team];
@@ -1162,6 +1307,8 @@ function step(dt) {
   for (const u of units.slice()) updateUnit(u, dt);
   separation(); icebergHits(dt);
   updateProjs(dt);
-  commander(ALLY, dt); commander(AXIS, dt); raids(dt); economy(dt);
+  for (const t of TEAMS) commander(t, dt);
+  raids(dt); economy(dt);
+  if (WAR) warTick();
   if (!battleOver) { updatePoints(dt); battleT -= dt; if (battleT <= 0) endBattle(); }
 }

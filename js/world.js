@@ -63,8 +63,8 @@ function snapTo(p, want) {
   }
   p.x = Math.round(p.x); p.z = Math.round(p.z);
 }
-for (const p of POINTS) { snapTo(p, p.sea ? -340 : 180); NODE[p.lane][p.col + 1] = p; }
-snapTo(NODE[SEA_LANE][0], -300); snapTo(NODE[SEA_LANE][COLS + 1], -300);
+for (const p of POINTS) { snapTo(p, p.sea ? -340 : 180); if (!WAR) NODE[p.lane][p.col + 1] = p; }
+if (!WAR) { snapTo(NODE[SEA_LANE][0], -300); snapTo(NODE[SEA_LANE][COLS + 1], -300); }
 for (const H of HOME) {                // each side's harbour: walk from inland to the shore, the port lies just off it
   let x = H.dockFrom.x, z = H.dockFrom.z, g = 0;
   while (sdf(x, z) > 0 && g++ < 600) { x += H.dockDir[0] * 10; z += H.dockDir[1] * 10; }

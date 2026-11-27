@@ -1,6 +1,7 @@
 // Runs a whole battle with no browser: the same rules files the game loads, in plain Node.
-// This is what a game server will do. Usage: node tools/headless.js [eu|pac|mod] [minutes]
+// This is what a game server will do. Usage: node tools/headless.js [eu|pac|mod|war2..war8] [minutes]
 //   node tools/headless.js pac 4
+//   node tools/headless.js war6 5      (Warlords with six armies)
 // It plays one battle with a computer "player" riding along in a vehicle and checks the rules keep working.
 'use strict';
 const fs = require('fs'), path = require('path'), vm = require('vm');
@@ -23,7 +24,7 @@ const result = run(`(() => {
   const startUnits = units.length;
   // a stand-in player: deploys in a tank at the front and drives forward with the gun held down
   const pl = addPlayer(ALLY, { name: 'Bot' });
-  const col = POINTS.filter(p => !p.eng && p.owner === ALLY).reduce((c, p) => Math.max(c, p.col), 0);
+  const col = WAR ? -1 : POINTS.filter(p => !p.eng && p.owner === ALLY).reduce((c, p) => Math.max(c, p.col), 0);
   const ride = SHOP.Land.find(id => plHas(pl, id) && !NONCOMBAT[DEFS[id].role] && DEFS[id].gun);
   deployPlayer(pl, ride, col);
   const deployed = pl.unit && pl.unit.def.name;
@@ -43,7 +44,8 @@ const result = run(`(() => {
   const bad = units.filter(u => !isFinite(u.pos.x) || !isFinite(u.pos.y) || !isFinite(u.pos.z)).length;
   return { theatre: TH.id, simulated: Math.round(time) + 's', startUnits, unitsNow: units.length, projectiles: projs.length,
     deployed, respawns, playerKills: pl.stats.kills, playerMoney: Math.round(pl.money), ...log, nonFiniteUnits: bad,
-    owners: { allied: ownedBy(ALLY), axis: ownedBy(AXIS), open: POINTS.length - ownedBy(ALLY) - ownedBy(AXIS) } };
+    owners: WAR ? TEAMS.map(t => TEAM_NAME[t] + ' ' + ownedBy(t) + ' pts, score ' + Math.round(Score[t]) + ', ' + units.filter(u => u.team === t && u.def.domain !== 'bld').length + ' units')
+      .concat(['open ' + POINTS.filter(p => p.owner < 0).length]) : { allied: ownedBy(ALLY), axis: ownedBy(AXIS), open: POINTS.length - ownedBy(ALLY) - ownedBy(AXIS) } };
 })()`);
 result.wallTime = ((Date.now() - t0) / 1000).toFixed(1) + 's';
 console.log(JSON.stringify(result, null, 2));

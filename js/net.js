@@ -42,11 +42,14 @@ const Online = {
   // Host: the server starts a battle on this theatre (with your unlocks and your campaign's front line), then this
   // page reloads into it as its host. mode: 'coop' (everyone against the computer) or 'pvp' (Allies against Axis).
   // code: the code the host wants (3 to 8 letters or numbers), or '' for a random one.
-  hostGame(addr, mode, code) {
+  // mode 'ffa' is Warlords: o.armies (2 to 8) and o.len (minutes) choose the map and the length of the match.
+  hostGame(addr, mode, code, o) {
     code = (code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (code && (code.length < 3 || code.length > 8)) { this.fail('A battle code is 3 to 8 letters or numbers.'); return; }
     this.status = 'Starting a battle on the server…'; renderMenu();
-    this.connect(addr, ws => ws.send(JSON.stringify({ t: 'host', mode, code, front: TH.custom ? TH.baseId : TH.id, map: TH.custom || null, tiers: Account.data.tiers, owners: POINTS.map(p => p.owner) })),
+    const ffa = mode === 'ffa';
+    this.connect(addr, ws => ws.send(JSON.stringify({ t: 'host', mode, code, front: ffa ? 'war' + o.armies : TH.custom ? TH.baseId : TH.id, map: ffa ? null : TH.custom || null,
+      tiers: Account.data.tiers, owners: ffa || WAR ? null : POINTS.map(p => p.owner), len: ffa ? o.len : 0 })),
       (m, ws) => {
         if (m.t === 'hosted') { ws.close(); sessionStorage.setItem(HOSTKEY_KEY, m.key); if (TH.custom) sessionStorage.setItem(NETMAP_KEY, JSON.stringify(TH.custom)); this.go(m.front, m.code); }
         else if (m.t === 'error') { ws.close(); this.fail(m.text); }
@@ -73,7 +76,7 @@ const Online = {
     if (m.t === 'welcome') {
       this.on = true; this.host = m.host; this.mode = m.mode; this.players = m.players; me.id = m.id; me.team = m.team; startOwned = m.startOwned;
       selCol = frontCol();
-      this.status = (m.mode === 'pvp' ? 'Versus: Allies against Axis' : 'Co-op: everyone against the computer') + (m.host ? ' · you are the host: read the code out to the others' : '');
+      this.status = (m.mode === 'ffa' ? `Warlords: you lead the ${TEAM_NAME[me.team]} army` : m.mode === 'pvp' ? 'Versus: Allies against Axis' : 'Co-op: everyone against the computer') + (m.host ? ' · you are the host: read the code out to the others' : '');
       showMsg(`Joined battle ${m.code}`, 'good'); renderMenu();
     } else if (m.t === 'front') {          // the battle is on another map: load that one, then join again
       if (m.map) sessionStorage.setItem(NETMAP_KEY, JSON.stringify(m.map));
@@ -101,7 +104,12 @@ const Online = {
     }
     for (const id of this.projMap.keys()) if (!pseen.has(id)) this.projMap.delete(id);
     projs.length = 0; for (const p of this.projMap.values()) projs.push(p);
-    s.c.forEach((a, i) => { const p = POINTS[i]; if (!p) return; if (p.owner !== a[0]) { p.owner = a[0]; frontVer++; } p.prog = a[1]; p.contest = !!a[2]; p.post = a[3] ? true : null; });
+    s.c.forEach((a, i) => { const p = POINTS[i]; if (!p) return; if (p.owner !== a[0]) { p.owner = a[0]; frontVer++; } p.prog = a[1]; p.contest = !!a[2]; p.post = a[3] ? true : null; p.by = a[4] === undefined ? -1 : a[4]; });
+    if (s.s) s.s.forEach((v, t) => { Score[t] = v; });                     // Warlords: the scores, and each army's vehicles
+    if (s.k) s.k.forEach((k, t) => {
+      if (KIT[t] === k) return;
+      KIT[t] = k; if (t === me.team && $('menu').classList.contains('on')) renderMenu();
+    });
     const w = s.w; World.water = World.cur.water = w[0]; World.vis = World.cur.vis = w[1]; World.reload = w[2]; World.season = w[3]; World.seasonT = w[4];
     World.icebergs.length = 0; for (const b of s.i) World.icebergs.push({ id: b[0], x: b[1], z: b[2], r: b[3], rot: b[4], k: b[5] });
     battleT = s.b[0]; time = s.b[1];

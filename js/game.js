@@ -100,14 +100,15 @@ function wireOut() {
 // Every unit in the battle gets a model here (keyed by its id), kept in step with it each frame. When the battle
 // drops a unit the model goes too; when one is destroyed its model turns into a wreck.
 function makeView(u) {
-  const d = u.def, v = { mesh: buildModel(d, u.team), team: u.team, people: [], chute: null, fxT: rnd(0, 1), seen: 0 };
+  // painted as its own side's vehicle (buildings: as its army's), banded in the colour of the army fielding it
+  const d = u.def, k = d.team !== undefined ? d.team : KIT[u.team], v = { mesh: buildModel(d, k), team: k, people: [], chute: null, fxT: rnd(0, 1), seen: 0 };
   scene.add(v.mesh); views.set(u.id, v);
   if (d.domain === 'bld' && d.model !== 'dock') addPeople(u, v);
   return v;
 }
 function addPeople(u, v) {
   const d = u.def, n = Math.min(d.people, 6);
-  const cols = d.job === 'workers' ? [0x3b5b8a, 0x2f4a70] : d.job === 'gunners' ? [u.team === ALLY ? 0x5a6a3c : 0x6a6d60] : [0xb04a3a, 0x3a7a5a, 0xc9a23a, 0x6a4a8a, 0xdedede];
+  const cols = d.job === 'workers' ? [0x3b5b8a, 0x2f4a70] : d.job === 'gunners' ? [KIT[u.team] === ALLY ? 0x5a6a3c : 0x6a6d60] : [0xb04a3a, 0x3a7a5a, 0xc9a23a, 0x6a4a8a, 0xdedede];
   for (let i = 0; i < n; i++) {
     const m = figure(cols[i % cols.length]); m.visible = false; scene.add(m);
     v.people.push({ mesh: m, a: rnd(0, 6.28), r: d.model === 'aagun' ? rnd(2, 3.2) : d.radius + rnd(1.5, 7), sp: (d.model === 'aagun' ? 0.15 : rnd(0.12, 0.3)) * (Math.random() < 0.5 ? -1 : 1) });
@@ -240,6 +241,14 @@ function syncProjs(dt) {
 const BEAM_GEO = new THREE.CylinderGeometry(5, 5, 320, 8, 1, true);
 const beams = [];
 function ownerHex(o) { return o < 0 ? 0xf2f0e0 : TEAM_COL[o]; }
+function ownerCss(o) { return o < 0 ? '#f2f0e0' : TEAM_CSS[o]; }
+// a lighter shade of a side's colour, for small dots and text on dark maps
+function lightCss(t) { const c = TEAM_COL[t]; return `rgb(${(c >> 16) + 255 >> 1},${(c >> 8 & 255) + 255 >> 1},${(c & 255) + 255 >> 1})`; }
+// which way a capture point's progress bar is heading, and in whose colour
+function progCss(p, light) { const t = WAR ? p.by : p.prog > 0 ? ALLY : AXIS; return t < 0 ? '#ccc' : light ? lightCss(t) : TEAM_CSS[t]; }
+// Warlords: what an army is called on screen (its player's name, or its colour)
+function lordName(t) { const r = (Online.roster || []).find(q => q[2] === t); return r ? r[1] : t === me.team ? 'You' : TEAM_NAME[t] + ' warlord'; }
+function lordLabel(t) { const n = lordName(t); return n.endsWith(' warlord') ? n : `${n} (${TEAM_NAME[t]})`; }
 function initPoints() {
   for (const p of POINTS) {
     const b = new THREE.Mesh(BEAM_GEO, new THREE.MeshBasicMaterial({ color: ownerHex(p.owner), transparent: true, opacity: 0.17, depthWrite: false, side: THREE.DoubleSide }));
@@ -252,6 +261,7 @@ function syncPoints() {
 // the front line, drawn in the world as a faint curtain following the ground
 const FRONT_MAT = new THREE.MeshBasicMaterial({ color: 0xffb030, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false });
 function refreshFront() {
+  if (WAR) return;                     // no front line: everyone for themselves
   const path = frontPath(), pts = [], pos = [], H = 30;
   for (let i = 0; i < path.length - 1; i++) {
     const a = path[i], b = path[i + 1], n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / 90));
@@ -338,7 +348,8 @@ function fillControls() {
 }
 function updateCamera(dt) {
   if (state === 'menu') {
-    const a = performance.now() * 0.00006, q = selCol < 0 ? ENG[1] : PT(selCol, 1); camera.position.set(q.x + Math.sin(a) * 380, q.y + 150, q.z + Math.cos(a) * 380);
+    const a = performance.now() * 0.00006, B = BASE[me.team];
+    const q = WAR ? (selCol < 0 ? { x: B.x, y: terrainH(B.x, B.z), z: B.z } : POINTS[selCol]) : selCol < 0 ? ENG[1] : PT(selCol, 1); camera.position.set(q.x + Math.sin(a) * 380, q.y + 150, q.z + Math.cos(a) * 380);
     camera.lookAt(q.x, q.y + 10, q.z); return;
   }
   if (!focus) return;
@@ -404,17 +415,19 @@ function toggleShop(on) {
 // ---- campaign map: shown before the battle, after losing a vehicle, and on M (paused)
 // The Allies push east from sector 0 (and their homeland, -1); the Axis push west from the last sector.
 function frontCol() {
+  if (WAR) return -1;
   const t = me.team; let c = t === ALLY ? 0 : COLS - 1;
   for (const p of POINTS) if (!p.eng && p.owner === t) c = t === ALLY ? Math.max(c, p.col) : Math.min(c, p.col);
   return c;
 }
 function canDeployIn(c) {
+  if (WAR) return c < 0 || (POINTS[c] && POINTS[c].owner === me.team);
   const t = me.team, home = t === ALLY ? c <= 0 : c === COLS - 1, next = frontCol() + (t === ALLY ? 1 : -1);
   return home || POINTS.some(p => secOf(p) === c && p.owner === t) || (TH.islands && c === next && c >= 0 && c < COLS);
 }
 // islands: picking a sector the Allies hold nothing in means an amphibious landing there
-function isLanding(c) { return TH.islands && c >= 0 && !POINTS.some(p => secOf(p) === c && p.owner === me.team); }
-function secPoints(c) { return POINTS.filter(p => secOf(p) === c); }
+function isLanding(c) { return !WAR && TH.islands && c >= 0 && !POINTS.some(p => secOf(p) === c && p.owner === me.team); }
+function secPoints(c) { return WAR ? (c < 0 ? [] : [POINTS[c]]) : POINTS.filter(p => secOf(p) === c); }
 function openMenu() {
   if (!canDeployIn(selCol)) selCol = frontCol();
   $('menu').classList.add('on'); if (document.exitPointerLock) document.exitPointerLock(); input.fire = false; input.zoom = false; renderMenu();
@@ -425,10 +438,12 @@ function toggleMap(on) {
 }
 function renderMenu() {
   const a = Account.data, mode = state;
-  $('menuTitle').textContent = mode === 'dead' ? 'Vehicle lost' : mode === 'map' ? 'Campaign map' : (TH.game || 'Frontline 1944');
-  $('menuSub').textContent = mode === 'dead' ? 'The wreck stays where it fell. Pick a sector on the map and a vehicle to rejoin the battle.'
+  $('menuTitle').textContent = mode === 'dead' ? 'Vehicle lost' : mode === 'map' ? (WAR ? 'Battle map' : 'Campaign map') : WAR ? 'Warlords' : (TH.game || 'Frontline 1944');
+  const where = WAR ? 'your base or a point you hold' : 'a sector on the map';
+  $('menuSub').textContent = mode === 'dead' ? `The wreck stays where it fell. Pick ${where} and a vehicle to rejoin the battle.`
     : mode === 'map' ? (Online.on ? 'The battle carries on. Redeploy to another sector or visit the Armory.' : 'The battle is paused. Redeploy to another sector, visit the Armory, or end the operation and bank your credits.')
-      : Online.code ? `Battle ${Online.code} on the game server. Pick a sector on the map and a vehicle to join the fight.` : TH.str.goal;
+      : Online.code ? (WAR ? `Warlords battle ${Online.code} on the game server: you lead the ${TEAM_NAME[me.team]} army. Most score when the clock runs out wins. Pick ${where} and a vehicle.`
+        : `Battle ${Online.code} on the game server. Pick ${where} and a vehicle to join the fight.`) : TH.str.goal;
   const ft = $('frontTabs'); ft.innerHTML = '';
   for (const k of Object.keys(THEATRES)) {
     const T = THEATRES[k], b = document.createElement('button'); b.className = 'tab' + (k === TH.id ? ' on' : '');
@@ -436,18 +451,33 @@ function renderMenu() {
     b.disabled = (mode !== 'menu' || Online.code) && k !== TH.id; if (b.disabled) b.title = Online.code ? 'Leave the online battle first' : 'End the operation first';
     b.onclick = () => { if (k !== TH.id && !b.disabled) switchTheatre(k); }; ft.append(b);
   }
-  if (!Online.code) for (const m of loadMaps()) {               // maps built in the map builder
+  {                                                         // Warlords: everyone for themselves
+    const b = document.createElement('button'); b.className = 'tab' + (WAR ? ' on' : '');
+    b.innerHTML = 'Warlords<small>Everyone for themselves</small>';
+    b.disabled = (mode !== 'menu' || Online.code) && !WAR; if (b.disabled) b.title = Online.code ? 'Leave the online battle first' : 'End the operation first';
+    b.onclick = () => { if (!WAR && !b.disabled) switchTheatre('war4'); }; ft.append(b);
+  }
+  if (!Online.code && !WAR) for (const m of loadMaps()) {               // maps built in the map builder
     const k = 'map-' + m.id, b = document.createElement('button'); b.className = 'tab' + (k === TH.id ? ' on' : '');
     b.innerHTML = '<span></span><small></small>'; b.firstChild.textContent = m.name; b.querySelector('small').textContent = 'Custom · ' + THEATRES[m.base].title;
     b.disabled = mode !== 'menu' && k !== TH.id; if (b.disabled) b.title = 'End the operation first';
     b.onclick = () => { if (k !== TH.id && mode === 'menu') switchTheatre(k); }; ft.append(b);
   }
-  if (mode === 'menu' && !Online.code) {
+  if (mode === 'menu' && !Online.code && !WAR) {
     const b = document.createElement('button'); b.className = 'tab builder'; b.innerHTML = '✎ Map Builder<small>Make your own battlefield</small>';
     b.onclick = () => { location.href = 'editor.html' + (TH.custom ? '?map=' + TH.custom.id : ''); }; ft.append(b);
   }
   $('acct').innerHTML = `<b>${a.credits.toLocaleString()}</b> credits` + (mode !== 'menu' ? ` <i>+${me.stats.credits.toLocaleString()} this battle</i>` : '') + `<small>${a.battles} battles · ${a.wins} won · ${a.kills} kills · ${a.campaigns} campaigns won</small>`;
   const sec = secPoints(selCol), held = sec.filter(p => p.owner === me.team).length;
+  if (WAR) {
+    $('sectorInfo').innerHTML = (selCol < 0 ? 'Deploying at <b>your base</b> · runway and harbour' : `Deploying at <b>${POINTS[selCol].name}</b>`) +
+      ' · click a point you hold on the map to deploy there';
+    if (mode === 'menu' && !Online.code) {                  // single player: how many armies
+      const row = document.createElement('div'); row.className = 'warN'; row.innerHTML = '<span>Armies</span>';
+      for (let k = 2; k <= 8; k++) { const b = document.createElement('button'); b.className = 'tab' + (k === NTEAMS ? ' on' : ''); b.textContent = k; b.onclick = () => { if (k !== NTEAMS) switchTheatre('war' + k); }; row.append(b); }
+      $('sectorInfo').append(row);
+    }
+  } else
   $('sectorInfo').innerHTML = isLanding(selCol) ? `Landing on <b>${SECTORS[selCol]}</b> · ground forces make an amphibious assault on its beach; ships and aircraft join the battle offshore`
     : (selCol < 0 ? `Deploying in <b>${HOME_NAME}</b>` : `Deploying in the <b>${SECTORS[selCol]}</b> sector`) + ` · ${held} of ${sec.length} points held` + (selCol === frontCol() ? ' · front line' : '') + (selCol < 0 ? ' · home runway and harbour' : '');
   const tabs = $('menuTabs'); tabs.innerHTML = '';
@@ -461,11 +491,12 @@ function renderMenu() {
   const row = $('menuBtns'); row.innerHTML = '';
   const mk = (label, alt, fn) => { const b = document.createElement('button'); b.className = 'btn' + (alt ? ' alt' : ''); b.textContent = label; b.onclick = fn; row.append(b); };
   if (mode === 'map') mk('Back to battle', false, () => toggleMap(false));
+  if (WAR && !Online.code && mode === 'menu') mk('Back to the campaign', true, () => switchTheatre('eu'));
   if (Online.code) {
     if (Online.on && Online.host && mode !== 'menu') mk('End the battle for everyone and bank credits', true, () => Online.send({ t: 'end' }));
     else if (Online.on && mode !== 'menu') mk('Leave the battle and bank credits', true, () => { Online.ws.close(); Online.on = false; showOver(); });
     else mk('Back to single player', true, () => Online.leave());
-  } else if (mode !== 'menu') mk('End operation and bank credits', true, () => endBattle());
+  } else if (mode !== 'menu') mk(WAR ? 'End the match and bank credits' : 'End operation and bank credits', true, () => endBattle());
 }
 // ---- playing together on the game server: host a battle and read out its code, or join one with a code
 function renderOnline() {
@@ -487,12 +518,19 @@ function renderOnline() {
       head('Players');
       const list = document.createElement('div'); list.className = 'netlist';
       for (const r of Online.roster) {
-        const d = document.createElement('div'); d.className = r[2] === ALLY ? 'ally' : 'axis';
+        const d = document.createElement('div'); d.className = WAR ? '' : r[2] === ALLY ? 'ally' : 'axis'; if (WAR) d.style.borderLeftColor = TEAM_CSS[r[2]];
         const unit = r[3] && units.find(u => u.id === r[3]);
         d.innerHTML = '<b></b><span></span>'; d.firstChild.textContent = r[1] + (r[0] === me.id ? ' (you)' : '');
-        d.lastChild.textContent = SIDE_PL[r[2]] + ' · ' + (unit ? unit.def.name : 'choosing a vehicle'); list.append(d);
+        d.lastChild.textContent = (WAR ? TEAM_NAME[r[2]] + ' army · ' + (KIT[r[2]] === ALLY ? 'Allied' : 'Axis') + ' vehicles · score ' + Math.round(Score[r[2]]) : SIDE_PL[r[2]]) + ' · ' + (unit ? unit.def.name : 'choosing a vehicle'); list.append(d);
       }
       box.append(list);
+    }
+    if (Online.on && WAR) {
+      head('Your vehicles');
+      const row = document.createElement('div'); row.className = 'netrow';
+      for (const k of [ALLY, AXIS]) { const b = btn(`Fly the ${k === ALLY ? 'Allied' : 'Axis'} flag`, k !== KIT[me.team], () => Online.send({ t: 'kit', kit: k }), row); b.disabled = k === KIT[me.team] || !!me.unit; }
+      box.append(row);
+      const n = document.createElement('div'); n.className = 'note'; n.textContent = 'Your army fights in your colour either way; this picks which vehicles you and your computer forces field.' + (me.unit ? ' You can change it when you are not in a vehicle.' : ''); box.append(n);
     }
     if (Online.on && Online.mode === 'pvp') {
       head('Your side');
@@ -515,6 +553,17 @@ function renderOnline() {
   btn('Versus: Allies vs Axis', false, () => { save(); Online.hostGame(addr.value, 'pvp', own.value); }, hrow);
   own.onkeydown = e => e.stopPropagation();
   box.append(hrow);
+  // Warlords: everyone for themselves, on a map made for the number of armies, for a set time
+  const wrow = document.createElement('div'); wrow.className = 'netrow';
+  const pick = (label, opts, val) => {
+    const l = document.createElement('label'); l.className = 'netpick'; l.innerHTML = '<span></span><select></select>'; l.firstChild.textContent = label;
+    for (const [v, t] of opts) { const o = document.createElement('option'); o.value = v; o.textContent = t; if (v === val) o.selected = true; l.lastChild.append(o); }
+    wrow.append(l); return l.lastChild;
+  };
+  const armies = pick('Armies', [2, 3, 4, 5, 6, 7, 8].map(k => [k, k + (k === 2 ? ' armies' : '')]), WAR ? NTEAMS : 4);
+  const len = pick('Match', [5, 10, 15, 20, 30].map(k => [k, k + ' min']), 10);
+  btn('Warlords: everyone for themselves', false, () => { save(); Online.hostGame(addr.value, 'ffa', own.value, { armies: +armies.value, len: +len.value }); }, wrow);
+  box.append(wrow);
   head('Join a battle');
   const jrow = document.createElement('div'); jrow.className = 'netrow';
   const code = codeBox('CODE'); jrow.append(code);
@@ -522,7 +571,7 @@ function renderOnline() {
   code.onkeydown = e => { e.stopPropagation(); if (e.key === 'Enter') join.onclick(); };
   box.append(jrow);
   const note = document.createElement('div'); note.className = 'note';
-  note.textContent = Online.status || 'Co-op: everyone fights for the Allies against the computer, and the host\'s unlocks set how strong the enemy is. Versus: players split between the Allies and the Axis, with the computer filling both armies. Everyone keeps the credits they earn.';
+  note.textContent = Online.status || 'Co-op: everyone fights for the Allies against the computer, and the host\'s unlocks set how strong the enemy is. Versus: players split between the Allies and the Axis, with the computer filling both armies. Warlords: every player leads an army of their own colour (the computer leads the rest) and the best score when the clock runs out wins. Everyone keeps the credits they earn.';
   box.append(note);
 }
 // online: the name others see above your vehicle, changeable from the menu (and the respawn screen)
@@ -589,7 +638,7 @@ function deploy(id) {
 function enterBattle(id, col, first, u) {
   lastBought = id;
   state = 'playing'; $('menu').classList.remove('on'); $('shop').classList.remove('on'); $('hud').style.display = 'block';
-  if (first) { const s = World.info; showBanner(secName(col) + (col < 0 ? '' : ' sector'), `${s.name}. ${s.desc}`); } else showMsg(`Deployed in ${DEFS[id].name}, ${secName(col)}`, 'good');
+  if (first) { const s = World.info; showBanner(WAR ? (col < 0 ? 'Warlords' : secName(col)) : secName(col) + (col < 0 ? '' : ' sector'), WAR ? `You are the ${TEAM_NAME[me.team]} army. ${s.name}: ${s.desc}.` : `${s.name}. ${s.desc}`); } else showMsg(`Deployed in ${DEFS[id].name}, ${secName(col)}`, 'good');
   if (u && u.landedAt) showMsg(`Amphibious landing! You are ashore below ${u.landedAt.name || 'the enemy capital'}.`, 'gold');
   if (!Online.code) lockPointer();
 }
@@ -600,6 +649,7 @@ function showRespawn() { openMenu(); }
 // ran out or the operation was called off. Credits are banked here; the state of the front is saved so the next
 // battle carries on from it.
 function showOver(winner) {
+  if (WAR) return showWarOver(winner);
   const result = winner === undefined ? null : winner === me.team ? 'won' : 'lost', st = me.stats;
   state = 'over';
   $('menu').classList.remove('on'); $('shop').classList.remove('on'); if (document.exitPointerLock) document.exitPointerLock();
@@ -622,6 +672,24 @@ function showOver(winner) {
   }
   setTimeout(() => $('over').classList.add('on'), result ? 2500 : 500);
 }
+// Warlords is a match of its own: it pays credits like a battle (more for a better place) and keeps no campaign map
+function showWarOver() {
+  const st = me.stats, order = TEAMS.slice().sort((a, b) => Score[b] - Score[a]), place = order.indexOf(me.team) + 1;
+  state = 'over';
+  $('menu').classList.remove('on'); $('shop').classList.remove('on'); if (document.exitPointerLock) document.exitPointerLock();
+  const rows = [[`Enemies destroyed (${st.kills})`, st.killCr], [`Points captured in person (${st.capCr / 250})`, st.capCr], ['Battle pay', 300]];
+  const placing = Math.round(800 * (NTEAMS - place) / (NTEAMS - 1) / 50) * 50; if (placing > 0) rows.push([`Finished ${ordinal(place)} of ${NTEAMS}`, placing]);
+  const total = rows.reduce((t, r) => t + r[1], 0);
+  Account.reward({ credits: total, kills: st.kills, win: place === 1, campaignWon: false, owners: null });
+  $('overTitle').textContent = place === 1 ? 'Victory' : ordinal(place) + ' place';
+  $('overSub').textContent = order.map((t, i) => `${i + 1}. ${lordLabel(t)} ${Math.round(Score[t])}`).join(' · ');
+  const box = $('overRows'); box.innerHTML = '';
+  for (const r of rows.concat([['Credits earned', total], ['Credits in the bank', Account.data.credits]])) {
+    const a = document.createElement('span'), b = document.createElement('b'); a.textContent = r[0]; b.textContent = (r[0] === 'Credits in the bank' ? '' : '+') + r[1].toLocaleString(); box.append(a, b);
+  }
+  setTimeout(() => $('over').classList.add('on'), 1200);
+}
+function ordinal(n) { return n + (n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th'); }
 // -------------------------------------------------------------- HUD
 let ovCtx, miniCtx, miniBg;
 function drawOverlay() {
@@ -639,13 +707,13 @@ function drawOverlay() {
     T1.copy(u.pos); T1.y += (u.def.centerY || 0) + (u.def.len ? u.def.beam * 1.6 : u.def.radius * 0.9) + 3; T1.project(camera);
     if (T1.z > 1 || Math.abs(T1.x) > 1 || Math.abs(T1.y) > 1) continue;
     const sx = (T1.x + 1) / 2 * w, sy = (1 - T1.y) / 2 * h, en = u.team !== me.team, s = u === zoomTarget ? 8 : 5;
-    c.fillStyle = en ? '#ff5a4d' : '#5b93ff'; c.strokeStyle = 'rgba(0,0,0,.6)'; c.lineWidth = 1;
+    c.fillStyle = WAR ? TEAM_CSS[u.team] : en ? '#ff5a4d' : '#5b93ff'; c.strokeStyle = 'rgba(0,0,0,.6)'; c.lineWidth = 1;
     c.beginPath();
     if (en) { c.moveTo(sx, sy - s); c.lineTo(sx + s, sy); c.lineTo(sx, sy + s); c.lineTo(sx - s, sy); }
     else { c.moveTo(sx - s, sy - s * 0.7); c.lineTo(sx + s, sy - s * 0.7); c.lineTo(sx, sy + s * 0.8); }
     c.closePath(); c.fill(); c.stroke();
     if (pilot) {                          // a person, not the computer: ringed, with a name tag in their side's colour
-      const col = en ? '#e0443a' : '#2f6fe6';
+      const col = WAR ? TEAM_CSS[u.team] : en ? '#e0443a' : '#2f6fe6';
       c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.55)'; c.beginPath(); c.arc(sx, sy, s + 7, 0, 6.283); c.stroke();
       c.lineWidth = 2; c.strokeStyle = '#fff'; c.stroke();
       c.font = '800 14px "Trebuchet MS",sans-serif'; c.textAlign = 'center'; c.textBaseline = 'middle';
@@ -665,12 +733,12 @@ function drawOverlay() {
     T1.set(p.x, p.y + 75, p.z); const dist = T1.distanceTo(camera.position); if (dist > 5200) continue;
     T1.project(camera); if (T1.z > 1 || Math.abs(T1.x) > 1 || Math.abs(T1.y) > 1) continue;
     const sx = (T1.x + 1) / 2 * w, sy = (1 - T1.y) / 2 * h;
-    c.fillStyle = p.owner < 0 ? '#f2f0e0' : p.owner === ALLY ? '#5b93ff' : '#ff5a4d'; c.strokeStyle = 'rgba(0,0,0,.7)'; c.lineWidth = 1.5;
+    c.fillStyle = WAR ? ownerCss(p.owner) : p.owner < 0 ? '#f2f0e0' : p.owner === ALLY ? '#5b93ff' : '#ff5a4d'; c.strokeStyle = 'rgba(0,0,0,.7)'; c.lineWidth = 1.5;
     c.beginPath(); c.moveTo(sx - 5, sy - 12); c.lineTo(sx + 9, sy - 7); c.lineTo(sx - 5, sy - 2); c.closePath(); c.fill(); c.stroke();
     c.beginPath(); c.moveTo(sx - 5, sy - 13); c.lineTo(sx - 5, sy + 4); c.stroke();
     const label = p.name + ' · ' + (dist * 3 > 5000 ? (dist * 3 / 5280).toFixed(1) + ' mi' : Math.round(dist * 3 / 10) * 10 + ' ft');
     c.lineWidth = 3; c.strokeText(label, sx, sy + 17); c.fillStyle = '#f4f1e2'; c.fillText(label, sx, sy + 17);
-    if (p.prog) { const bw = 46; c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(sx - bw / 2, sy + 22, bw, 5); c.fillStyle = p.prog > 0 ? '#5b93ff' : '#ff5a4d'; c.fillRect(sx - bw / 2, sy + 22, bw * Math.min(1, Math.abs(p.prog)), 5); }
+    if (p.prog) { const bw = 46; c.fillStyle = 'rgba(0,0,0,.6)'; c.fillRect(sx - bw / 2, sy + 22, bw, 5); c.fillStyle = progCss(p); c.fillRect(sx - bw / 2, sy + 22, bw * Math.min(1, Math.abs(p.prog)), 5); }
   }
   const lk = state === 'playing' ? playerLock() : null;
   if (lk) {                                 // missile seeker lock box
@@ -711,6 +779,7 @@ function mapBg() {
   return mapBgCv;
 }
 function drawFrontLine(c, X, Z, lw) {
+  if (WAR) return;
   const path = frontPath();
   c.beginPath(); path.forEach((q, i) => c[i ? 'lineTo' : 'moveTo'](X(q[0]), Z(q[1])));
   c.lineJoin = 'round'; c.strokeStyle = 'rgba(0,0,0,.65)'; c.lineWidth = lw + 2; c.stroke();
@@ -719,9 +788,9 @@ function drawFrontLine(c, X, Z, lw) {
 function drawPointDots(c, X, Z, r, names) {
   for (const p of POINTS) {
     const x = X(p.x), z = Z(p.z);
-    c.beginPath(); c.arc(x, z, r, 0, 6.3); c.fillStyle = p.owner < 0 ? '#f2f0e0' : p.owner === ALLY ? '#3f7dff' : '#f04a3c'; c.fill();
+    c.beginPath(); c.arc(x, z, r, 0, 6.3); c.fillStyle = ownerCss(p.owner); c.fill();
     c.lineWidth = 1.5; c.strokeStyle = p.contest ? '#ffd24a' : '#101010'; c.stroke();
-    if (p.prog) { c.beginPath(); c.arc(x, z, r + 3, -Math.PI / 2, -Math.PI / 2 + Math.abs(p.prog) * 6.283); c.strokeStyle = p.prog > 0 ? '#9fc0ff' : '#ff9a8a'; c.lineWidth = 2.5; c.stroke(); }
+    if (p.prog) { c.beginPath(); c.arc(x, z, r + 3, -Math.PI / 2, -Math.PI / 2 + Math.abs(p.prog) * 6.283); c.strokeStyle = progCss(p, true); c.lineWidth = 2.5; c.stroke(); }
     if (names) { c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.75)'; c.strokeText(p.name, x, z + r + 13); c.fillStyle = '#f4f1e2'; c.fillText(p.name, x, z + r + 13); }
   }
 }
@@ -731,7 +800,7 @@ function drawUnitDots(c, X, Z, k) {
     if (u === me.unit || u.def.model === 'outpost' || u.def.model === 'seafort') continue;
     if (u.team !== me.team && World.vis < 0.6 && focus && hdist(u.pos, focus) > fogR && u.def.domain !== 'bld') continue;
     if (u.team !== me.team && u.def.sub && u.dive > 0.5 && focus && hdist(u.pos, focus) > 450) continue;
-    c.fillStyle = u.team === ALLY ? '#8fb8ff' : '#ff8a7a';
+    c.fillStyle = WAR ? lightCss(u.team) : u.team === ALLY ? '#8fb8ff' : '#ff8a7a';
     const x = X(u.pos.x), z = Z(u.pos.z);
     if (u.def.model === 'airport') c.fillRect(x - 9 * k, z + 1, 18 * k, 2);
     if (u.def.domain === 'bld') { const q = (u.def.model === 'hq' ? 7 : 4) * k; c.fillRect(x - q / 2, z - q / 2, q, q); }
@@ -748,13 +817,13 @@ function drawPilots(c, X, Z, r, names) {
     c.strokeStyle = '#fff'; c.lineWidth = 1.5; c.beginPath(); c.arc(x, z, r, 0, 6.3); c.stroke();
     if (!names) continue;
     c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.8)'; c.strokeText(pilot.name, x, z - r - 3);
-    c.fillStyle = pilot.team === ALLY ? '#bcd4ff' : '#ffb3a8'; c.fillText(pilot.name, x, z - r - 3);
+    c.fillStyle = WAR ? lightCss(pilot.team) : pilot.team === ALLY ? '#bcd4ff' : '#ffb3a8'; c.fillText(pilot.name, x, z - r - 3);
   }
 }
 // the corner map shows the ground around you; M opens the whole campaign
 function drawMini() {
   const cv = $('mini'), w = cv.width, h = cv.height, c = miniCtx, bg = mapBg();
-  const span = 1500, spanZ = span * h / w, f = focus ? focus : selCol < 0 ? ENG[1] : PT(selCol, 1);
+  const span = 1500, spanZ = span * h / w, f = focus ? focus : WAR ? (selCol < 0 ? BASE[me.team] : POINTS[selCol]) : selCol < 0 ? ENG[1] : PT(selCol, 1);
   const cx = clamp(f.x, -MAP.x + span, MAP.x - span), cz = clamp(f.z, -MAP.z + spanZ, MAP.z - spanZ);
   const kx = bg.width / (2 * MAP.x), kz = bg.height / (2 * MAP.z);
   c.drawImage(bg, (cx - span + MAP.x) * kx, (cz - spanZ + MAP.z) * kz, 2 * span * kx, 2 * spanZ * kz, 0, 0, w, h);
@@ -825,6 +894,7 @@ function drawCamp() {
   const cv = $('camp'), w = cv.width, h = cv.height, c = campCtx;
   if (!euBg) drawEuBg(w, h);
   c.drawImage(euBg, 0, 0);
+  if (WAR) return drawWarMap(c, w, h);
   c.lineCap = 'round'; c.lineJoin = 'round';
   for (let l = 0; l < LANES; l++) {        // ground held: each lane washed in its owner's colour up to the front
     const f = frontIdx(l);
@@ -873,6 +943,53 @@ function drawCamp() {
   }
   if (state !== 'menu' && focus) { const q = euWorld(focus.x, focus.z, w, h); c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(q[0], q[1], 7, 0, 6.3); c.stroke(); }
 }
+function drawWarMap(c, w, h) {
+  const P = p => euPoint(p, w, h);
+  const text = (t, x, y, col) => { c.lineWidth = 3; c.strokeStyle = 'rgba(0,0,0,.8)'; c.strokeText(t, x, y); c.fillStyle = col || '#f4f1e2'; c.fillText(t, x, y); };
+  c.lineCap = 'round'; c.lineJoin = 'round';
+  for (const p of POINTS) for (const i of p.from) {     // the routes between points: bright where you can attack along them
+    const q = POINTS[i]; if (i > p.i && q.from.includes(p.i)) continue;
+    const a = P(p), b = P(q), open = q.owner === me.team && p.owner !== me.team;
+    c.beginPath(); c.moveTo(a[0], a[1]); c.lineTo(b[0], b[1]);
+    c.strokeStyle = open ? 'rgba(242,193,78,.75)' : p.sea ? 'rgba(150,200,230,.22)' : 'rgba(240,235,210,.22)'; c.lineWidth = open ? 2.5 : 1.5;
+    c.setLineDash(open ? [] : [4, 5]); c.stroke(); c.setLineDash([]);
+  }
+  c.textAlign = 'center'; c.font = '700 11px "Trebuchet MS",sans-serif';
+  for (const t of TEAMS) {                                  // every base, in its army's colour, named after its warlord
+    const q = euWorld(BASE[t].x, BASE[t].z, w, h), sel = t === me.team && selCol < 0;
+    c.fillStyle = TEAM_CSS[t]; c.strokeStyle = sel ? '#f2c14e' : '#101010'; c.lineWidth = sel ? 3 : 1.5;
+    c.fillRect(q[0] - 9, q[1] - 9, 18, 18); c.strokeRect(q[0] - 9, q[1] - 9, 18, 18);
+    c.fillStyle = '#fff'; c.fillText('HQ', q[0], q[1] + 4);
+    text(lordName(t) + (t === me.team ? ' (you)' : '') + ' · ' + Math.round(Score[t]), q[0], q[1] + (BASE[t].z > 0 ? 24 : -15), t === me.team ? '#f2c14e' : lightCss(t));
+  }
+  if (state !== 'menu') for (const u of units) {
+    if (u === me.unit || u.def.domain === 'bld' || (u.team !== me.team && u.def.sub && u.dive > 0.5)) continue;
+    const q = euWorld(u.pos.x, u.pos.z, w, h); c.fillStyle = lightCss(u.team); c.fillRect(q[0] - 1.5, q[1] - 1.5, 3, 3);
+  }
+  drawPilots(c, x => euWorld(x, 0, w, h)[0], z => euWorld(0, z, w, h)[1], 6, true);
+  for (const p of POINTS) {
+    const q = P(p), r = p.cit ? 9 : 7, sel = p.i === selCol;
+    if (sel) { c.beginPath(); c.arc(q[0], q[1], r + 7, 0, 6.3); c.strokeStyle = '#f2c14e'; c.lineWidth = 3; c.stroke(); }
+    c.beginPath(); c.arc(q[0], q[1], r, 0, 6.3); c.fillStyle = ownerCss(p.owner); c.fill();
+    c.lineWidth = 1.5; c.strokeStyle = p.contest ? '#ffd24a' : '#101010'; c.stroke();
+    if (p.cit) { c.fillStyle = '#101010'; c.font = '700 10px "Trebuchet MS",sans-serif'; c.fillText('★', q[0], q[1] + 4); }
+    if (p.prog) { c.beginPath(); c.arc(q[0], q[1], r + 3, -Math.PI / 2, -Math.PI / 2 + Math.abs(p.prog) * 6.283); c.strokeStyle = progCss(p, true); c.lineWidth = 2.5; c.stroke(); }
+    c.font = (p.cit ? '700 11px' : '700 10px') + ' "Trebuchet MS",sans-serif';
+    const side = p.cit && Math.abs(p.x) > 60 ? Math.sign(p.x) : 0;    // the Citadel's lower points are labelled to the side
+    c.textAlign = side > 0 ? 'left' : side < 0 ? 'right' : 'center';
+    if (p.cit || sel || p.owner === me.team || canCap(p, me.team)) text(p.name, q[0] + side * (r + 5), side ? q[1] + 4 : p.cit ? q[1] - r - 6 : q[1] + r + 12, sel ? '#f2c14e' : p.owner === me.team ? '#f4f1e2' : 'rgba(244,241,226,.7)');
+    c.textAlign = 'center';
+  }
+  if (state !== 'menu' && focus) { const q = euWorld(focus.x, focus.z, w, h); c.strokeStyle = '#fff'; c.lineWidth = 2; c.beginPath(); c.arc(q[0], q[1], 7, 0, 6.3); c.stroke(); }
+}
+// Warlords: every army's score, best first
+function renderScores() {
+  const el = $('scores'); if (!WAR) { el.style.display = 'none'; return; }
+  el.style.display = '';
+  const order = TEAMS.slice().sort((a, b) => Score[b] - Score[a]);
+  el.innerHTML = order.map(t => `<i style="background:${TEAM_CSS[t]}"></i><span${t === me.team ? ' class="me"' : ''}></span><b>${Math.round(Score[t])}</b>`).join('');
+  el.querySelectorAll('span').forEach((sp, i) => { const t = order[i]; sp.textContent = lordName(t) + ' · ' + ownedBy(t) + ' pts'; });
+}
 function updateHUD(dt) {
   if (hurtFlash > 0) hurtFlash -= dt;
   if (nukeFlash > 0) nukeFlash -= dt * 0.6;
@@ -880,7 +997,8 @@ function updateHUD(dt) {
   if (touchMode) $('tZoom').classList.toggle('on', input.zoom);
   $('money').textContent = '$' + Math.floor(me.money).toLocaleString();
   const bt = Math.max(0, Math.ceil(battleT));
-  $('battle').textContent = `Operation ends in ${Math.floor(bt / 60)}:${('0' + bt % 60).slice(-2)} · +${me.stats.credits.toLocaleString()} credits`;
+  $('battle').textContent = `${WAR ? 'Match' : 'Operation'} ends in ${Math.floor(bt / 60)}:${('0' + bt % 60).slice(-2)} · +${me.stats.credits.toLocaleString()} credits`;
+  renderScores();
   const inc = incomeOf(me.team);
   $('income').textContent = `+$${inc} every ${INCOME_PERIOD}s from buildings`;
   const s = World.info;
@@ -918,6 +1036,7 @@ function updateHUD(dt) {
     if (cp.post) txt = cp.owner === me.team ? `${cp.name} · held by the ${SIDE_PL[me.team]}` : `${cp.name} · destroy the ${TEAM_NAME[cp.owner]} command post to open it for capture`;
     else if (!fits) txt = `${cp.name} · open: only ${cp.sea ? 'warships' : 'ground forces'} can capture it`;
     else if (cp.contest) txt = `${cp.name} · contested! Clear the enemy out`;
+    else if (WAR && !canCap(cp, me.team)) txt = `${cp.name} · cut off: hold a point next to it first (see the map)`;
     else if (!canCap(cp, me.team)) { const k = me.team === ALLY ? -1 : 1, n = cp.eng ? ENG[cp.col + k] : PT(cp.col + k, cp.lane); txt = n ? `${cp.name} · cut off: take ${n.name} first` : `${cp.name} · cut off`; }
     else { txt = `Capturing ${cp.name}`; k = Math.max(0, cp.prog); }
     capEl.style.display = 'block'; $('capTxt').textContent = txt; $('capBar').style.width = k * 100 + '%'; $('capBar').parentNode.style.display = k > 0 || txt.startsWith('Capturing') ? '' : 'none';
@@ -1062,8 +1181,10 @@ function init() {
     const cv = e.currentTarget, r = cv.getBoundingClientRect(), mx = (e.clientX - r.left) / r.width * cv.width, my = (e.clientY - r.top) / r.height * cv.height;
     let c = 0, bd = 1e9;                   // the sector whose nearest point is closest to the click
     for (const p of POINTS) { const q = euPoint(p, cv.width, cv.height), dd = Math.hypot(q[0] - mx, q[1] - my); if (dd < bd) { bd = dd; c = secOf(p); } }
+    if (WAR) { const q = euWorld(BASE[me.team].x, BASE[me.team].z, cv.width, cv.height); if (Math.hypot(q[0] - mx, q[1] - my) < bd) c = -1; }
     if (canDeployIn(c)) { selCol = c; renderMenu(); }
-    else $('sectorInfo').innerHTML = `The <b>${secName(c)}</b> sector is not in ${TEAM_NAME[me.team]} hands: you can only deploy where the ${SIDE_PL[me.team]} hold a point.`;
+    else $('sectorInfo').innerHTML = WAR ? `<b>${secName(c)}</b> is not yours: you can deploy at your base or at a point you hold.`
+      : `The <b>${secName(c)}</b> sector is not in ${TEAM_NAME[me.team]} hands: you can only deploy where the ${SIDE_PL[me.team]} hold a point.`;
   });
   $('helpCampaign').innerHTML = TH.help;
   $('resetLink').onclick = () => { if (confirm('Start again from scratch? Every unlock, credit and the campaign map is lost.')) { Account.reset(); location.reload(); } };

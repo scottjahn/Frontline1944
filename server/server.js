@@ -12,7 +12,7 @@ const PORT = +process.env.PORT || 8080;
 const ROOT = path.resolve(process.env.GAME_ROOT || path.join(__dirname, '..'));
 const MAX_ROOMS = +process.env.MAX_ROOMS || 6, MAX_PLAYERS = 8;
 const IDLE_CLOSE = 120 * 1000, OVER_CLOSE = 90 * 1000;      // close a room this long after it empties / its battle ends
-const FRONTS = ['eu', 'pac', 'mod'];
+const FRONTS = ['eu', 'pac', 'mod'], WAR_RE = /^war[2-8]$/;          // the campaigns, and Warlords for 2 to 8 armies
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 
 // ---------------------------------------------------------------- the game's own files
@@ -44,12 +44,14 @@ function makeRoom(o, ready, fail) {
   if (want && !CODE_RE.test(want)) return fail('A battle code is 3 to 8 letters or numbers.');
   if (want && rooms.has(want)) return fail(`The code ${want} is already in use. Pick another one.`);
   const code = want || newCode(); if (!code) return fail('The server is full right now.');
-  const mode = o.mode === 'pvp' ? 'pvp' : 'coop';
-  const map = o.map && typeof o.map === 'object' && FRONTS.includes(o.map.base) && o.map.id ? o.map : null;
-  const front = map ? 'map-' + map.id : FRONTS.includes(o.front) ? o.front : 'eu';
+  const mode = o.mode === 'pvp' || o.mode === 'ffa' ? o.mode : 'coop', war = mode === 'ffa';
+  if (war && !WAR_RE.test(o.front)) return fail('Pick how many armies the Warlords battle has.');
+  const map = !war && o.map && typeof o.map === 'object' && FRONTS.includes(o.map.base) && o.map.id ? o.map : null;
+  const front = war ? o.front : map ? 'map-' + map.id : FRONTS.includes(o.front) ? o.front : 'eu';
+  const seats = war ? Math.min(MAX_PLAYERS, +o.front.slice(3)) : MAX_PLAYERS;
   const t0 = Date.now();
-  const worker = new Worker(path.join(__dirname, 'battle.js'), { workerData: { root: ROOT, front: map ? map.base : front, map, mode, tiers: o.tiers || null, owners: Array.isArray(o.owners) ? o.owners : null } });
-  const room = { code, mode, key: crypto.randomBytes(12).toString('hex'), worker, front, map, clients: new Map(), pending: new Map(), emptySince: Date.now(), overAt: 0, ok: false };
+  const worker = new Worker(path.join(__dirname, 'battle.js'), { workerData: { root: ROOT, front: map ? map.base : front, map, mode, tiers: o.tiers || null, owners: Array.isArray(o.owners) ? o.owners : null, len: war ? +o.len || 10 : 0 } });
+  const room = { code, mode, seats, key: crypto.randomBytes(12).toString('hex'), worker, front, map, clients: new Map(), pending: new Map(), emptySince: Date.now(), overAt: 0, ok: false };
   rooms.set(code, room);
   worker.on('message', m => {
     if (m.t === 'ready') { room.ok = true; log(`room ${code} opened: ${front}, ${mode} (map built in ${Date.now() - t0} ms)`); ready(room); }
@@ -61,6 +63,7 @@ function makeRoom(o, ready, fail) {
       for (const o of room.clients.values()) if (o !== c) send(o.ws, { t: 'note', text: `${m.name} joined the battle` });
       log(`room ${code}: ${m.name} joined (${room.clients.size} playing)`);
     }
+    else if (m.t === 'refused') { const c = room.pending.get(m.cid); room.pending.delete(m.cid); if (c) { send(c.ws, { t: 'error', text: m.text }); c.ws.close(); } }
     else if (m.t === 'over') room.overAt = Date.now();
   });
   worker.on('error', e => { log(`room ${code}: battle error`, e && e.stack || e); if (!room.ok) fail('Could not start a battle on the server.'); closeRoom(room, 'the battle hit an error'); });
@@ -101,7 +104,7 @@ wss.on('connection', ws => {
       if (!r || !r.ok) return send(ws, { t: 'error', text: 'No battle with that code. Check the code with whoever is hosting.' });
       if (r.overAt) return send(ws, { t: 'error', text: 'That battle is already over.' });
       if (m.front !== r.front) return send(ws, { t: 'front', front: r.front, map: r.map });   // load the right map first
-      if (r.clients.size + r.pending.size >= MAX_PLAYERS) return send(ws, { t: 'error', text: 'That battle is full.' });
+      if (r.clients.size + r.pending.size >= r.seats) return send(ws, { t: 'error', text: r.mode === 'ffa' ? `That battle is full: all ${r.seats} armies have a player.` : 'That battle is full.' });
       room = r; r.pending.set(cid, { ws });
       r.worker.postMessage({ t: 'join', cid, name: String(m.name || 'Player').slice(0, 24), tiers: m.tiers, host: m.key === r.key });
     }

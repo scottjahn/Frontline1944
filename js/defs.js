@@ -2,7 +2,13 @@
 // ---------- constants & unit definitions ----------
 const SIDES = TH.sides || { adj: ['Allied', 'Axis'], pl: ['Allies', 'Axis'] };
 const TEAM_NAME = SIDES.adj, SIDE_PL = SIDES.pl;          // 'Allied' / 'the Allies' (or 'US' / 'the Americans')
-const TEAM_COL = [0x3a78ff, 0xd83030];
+// Warlords (TH.war): n armies, each its own colour. KIT[t] is the vehicle set an army fields (ALLY or AXIS), so
+// two warlords can both fly Spitfires; outside Warlords every side fields its own.
+const WAR = TH.war || null, NTEAMS = WAR ? WAR.n : 2;
+const TEAM_COL = WAR ? WAR_HEX.slice(0, NTEAMS) : [0x3a78ff, 0xd83030];
+const TEAM_CSS = WAR ? WAR_CSS.slice(0, NTEAMS) : ['#3f7dff', '#f04a3c'];
+const KIT = Array.from({ length: NTEAMS }, (_, t) => WAR ? t % 2 : t);
+const TEAMS = [...Array(NTEAMS).keys()];
 // The battlefield is the theatre's map box seen from above: x runs west to east, z north to south.
 const MAP = { x: 7000, z: 3750 };
 const GEO = TH.box, LAND = TH.land, TERRAIN = TH.terrain || [], FACE = TH.face, INVADE = TH.invade, HOME_NAME = TH.homeland.name;
@@ -20,6 +26,11 @@ const SECTORS = TH.sectors;
 const COLS = SECTORS.length, LANES = 3, SEA_LANE = 2;
 const NODE = TH.lanes.map(l => l.map(LLq));
 const POINTS = [];
+if (WAR) TH.points.forEach((q, i) => {                  // Warlords: a web of points (see warTheatre in theatres.js)
+  const o = LLq(q.p);
+  POINTS.push({ i, col: -9, lane: q.sea ? SEA_LANE : 0, sea: !!q.sea, name: q.name, x: o.x, z: o.z, owner: q.home === undefined ? -1 : q.home,
+    home: q.home === undefined ? -1 : q.home, from: q.from, cit: !!q.cit, prog: 0, by: -1, post: null, rubble: null });
+});
 for (let c = 0; c < COLS; c++) for (let l = 0; l < LANES; l++)
   POINTS.push({ i: POINTS.length, col: c, lane: l, sea: l === SEA_LANE, name: (TH.pointNames && TH.pointNames[c][l]) || SECTORS[c] + TH.laneTags[l],
     x: NODE[l][c + 1].x, z: NODE[l][c + 1].z, owner: TH.start(c, l), prog: 0, post: null, rubble: null });
@@ -30,8 +41,8 @@ NODE.push(TH.homeland.nodes.map(LLq));
 const ENG = ENG_NAMES.map((name, c) => ({ i: POINTS.length + c, col: c, lane: ENG_LANE, eng: true, sea: false, name,
   x: NODE[ENG_LANE][c + 1].x, z: NODE[ENG_LANE][c + 1].z, owner: TH.homeStart[c], prog: 0, post: null, rubble: null }));
 POINTS.push(...ENG);
-function secOf(p) { return p.eng ? -1 : p.col; }             // sector a point belongs to: -1 is England
-function secName(c) { return c < 0 ? HOME_NAME : SECTORS[c]; }
+function secOf(p) { return WAR ? p.i : p.eng ? -1 : p.col; }             // sector a point belongs to: -1 is England
+function secName(c) { return WAR ? (c < 0 ? 'your base' : POINTS[c].name) : c < 0 ? HOME_NAME : SECTORS[c]; }
 function PT(col, lane) { return POINTS[col * LANES + lane]; }
 const CAP_R = 230, CAP_R_SEA = 330;
 const BATTLE_LEN = 720;                 // one battle (operation) lasts twelve minutes

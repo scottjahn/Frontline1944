@@ -7,6 +7,10 @@ code (3 to 8 letters or numbers) or let the server make one up. Single player ke
 - **Co-op**: everyone fights for the Allies against the computer.
 - **Versus**: players split between the Allies and the Axis (new players start on the smaller side, and can change
   sides while they are not in a vehicle); the computer fills out both armies.
+- **Warlords**: everyone for themselves on a round map made for 2 to 8 armies, each with its own colour, base and
+  points. Every player leads an army (the computer leads the rest); the host picks the number of armies and the
+  match length (5 to 30 minutes), and the best score when the clock runs out wins. A Warlords room seats as many
+  players as it has armies.
 
 Players' vehicles carry name tags in their side's colour; names can be changed from the menu during a battle.
 

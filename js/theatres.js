@@ -412,7 +412,69 @@ const MOD_THEATRE = {
   ]
 };
 
+// ---------------------------------------------------------------- Warlords: everyone for themselves
+// A round continent with each warlord's base on its coast, evenly spaced so nobody is closer to the middle than
+// anyone else. Every warlord starts with two points of their own (the Keep inland of their base and the Roads off
+// its harbour). Between each pair of neighbours there is a border point on land and one at sea, and in the middle
+// stands the Citadel: three points on a hill that score fastest of all. A point can be captured by whoever holds
+// one of the points listed in its `from` (and a warlord can always retake their own two). Built for n warlords
+// (2 to 8): the battlefield is laid out in battlefield coordinates and stored as longitude / latitude like the
+// other theatres (the box below maps one degree to 700 units both ways).
+const WAR_COLOURS = ['Blue', 'Red', 'Green', 'Gold', 'Purple', 'Orange', 'Teal', 'Pink'];
+const WAR_CSS = ['#3f7dff', '#f04a3c', '#3fbf4f', '#f2c42e', '#a35ae8', '#ff8a2a', '#2ec4c9', '#f06ab4'];
+const WAR_HEX = WAR_CSS.map(c => parseInt(c.slice(1), 16));
+function warTheatre(n) {
+  const R = 3000, LAT1 = 20 * 3750 / 7000;
+  const L = (x, z) => [+((x / 7000 + 1) * 10).toFixed(4), +(LAT1 * (0.5 - z / 7500)).toFixed(4)];
+  const at = (th, rad, tan) => L(Math.cos(th) * rad - Math.sin(th) * (tan || 0), Math.sin(th) * rad + Math.cos(th) * (tan || 0));
+  const ang = t => Math.PI + t * 2 * Math.PI / n, mid = t => ang(t) + Math.PI / n;
+  // the coastline: a circle, gently wobbling, a little further out behind each base
+  const coast = [];
+  for (let i = 0; i < 72; i++) {
+    const a = i / 72 * 2 * Math.PI, k = 1 + 0.025 * Math.sin(a * 5 + 1) + 0.02 * Math.sin(a * 9 + 4);
+    coast.push(L(Math.cos(a) * R * k, Math.sin(a) * R * k));
+  }
+  const land = [coast];
+  // a few rocky islets in the open sea east and west, with no points on them: room for ships and aircraft
+  [[-5300, -1700], [-5600, 1500], [5300, 1700], [5600, -1500], [-4700, -100], [4700, 100]].forEach(([x, z], i) =>
+    land.push(islandBlob(L(x, z), 0.35 + (i % 3) * 0.08, 0.22, i * 0.7, 71 + i * 3)));
+  const terrain = [['hill', ...L(0, 0), 620], ['mtn', ...L(0, 0), 230], ['forest', ...L(0, 0), 900]];
+  for (let t = 0; t < n; t++) {
+    terrain.push(['forest', ...at(mid(t), 1150), 330], ['hill', ...at(mid(t), 2650), 260]);
+    if (n <= 5) terrain.push(['forest', ...at(ang(t), 1150, 500), 220], ['forest', ...at(ang(t), 1150, -500), 220]);
+  }
+  // capture points: 0..n-1 the Keeps, n..2n-1 the Roads, then the borders on land and at sea, then the Citadel
+  const keep = t => t, roads = t => n + t, bland = t => 2 * n + t, bsea = t => 3 * n + t, cit = i => 4 * n + i, pts = [];
+  const prev = t => (t + n - 1) % n, next = t => (t + 1) % n;
+  const cits = [0, 1, 2].map(cit), borders = [...Array(n).keys()].map(bland), keeps = [...Array(n).keys()].map(keep);
+  for (let t = 0; t < n; t++) pts.push({ name: WAR_COLOURS[t] + ' Keep', p: at(ang(t), 1600), home: t, from: [bland(prev(t)), bland(t)] });
+  for (let t = 0; t < n; t++) pts.push({ name: WAR_COLOURS[t] + ' Roads', p: at(ang(t), 3420), sea: true, home: t, from: n > 2 ? [bsea(prev(t)), bsea(t)] : [bsea(0), bsea(1)] });
+  for (let t = 0; t < n; t++) pts.push({ name: n > 2 ? `${WAR_COLOURS[t]}-${WAR_COLOURS[next(t)]} Pass` : ['North Pass', 'South Pass'][t], p: at(mid(t), n > 2 ? 2000 : 1500), from: [keep(t), keep(next(t)), ...cits] });
+  for (let t = 0; t < n; t++) pts.push({ name: n > 2 ? `${WAR_COLOURS[t]}-${WAR_COLOURS[next(t)]} Strait` : ['North Strait', 'South Strait'][t], p: at(mid(t), 3420), sea: true, from: n > 2 ? [roads(t), roads(next(t))] : [roads(0), roads(1)] });
+  ['Citadel Gate', 'Citadel Tower', 'Citadel Hall'].forEach((name, i) => pts.push({ name, p: at(-Math.PI / 2 + i * 2 * Math.PI / 3, 430), cit: true, from: [...keeps, ...borders, ...cits.filter(c => c !== cit(i))] }));
+  const T = [...Array(n).keys()], out = t => [Math.cos(ang(t)), Math.sin(ang(t))];
+  return {
+    id: 'war' + n, title: 'Warlords', place: 'Warlords', blurb: `Everyone for themselves · ${n} warlords`, war: { n },
+    box: { lon0: 0, lon1: 20, lat0: 0, lat1: LAT1 },
+    face: T.map(t => Math.cos(ang(t)) > 0 ? -1 : 1),
+    base: T.map(t => at(ang(t), 2150)), airport: T.map(t => at(ang(t), 2560)),
+    home: T.map(t => ({ depot: at(ang(t), 1750, 380), airDepot: at(ang(t), 3600, -300), dockFrom: at(ang(t), 2150, -260), dockDir: out(t),
+      dockYaw: Math.atan2(out(t)[0], out(t)[1]), seaFar: at(ang(t), 3550, 520) })),
+    land, terrain, points: pts,
+    sectors: [], laneTags: ['', '', ''], lanes: [[], [], []],
+    homeland: { name: 'Home', names: [], nodes: [] }, invade: { col: 0, lane: 1, fromSea: false }, islands: false,
+    start: () => -1, homeStart: [], seasons: EU_SEASONS, grid: [2, 2], labels: [], hqLabels: T.map(t => WAR_COLOURS[t] + ' HQ'),
+    sides: { adj: WAR_COLOURS.slice(0, n), pl: WAR_COLOURS.slice(0, n).map(c => c + ' army') },
+    str: { goal: `Warlords: ${n} armies, everyone for themselves. Hold points to score; the three Citadel points in the middle score fastest. Whoever has the most points when the clock runs out wins. Pick your base or a point you hold on the map, then choose a vehicle.`,
+      advance: 'Your banner flies over another point', retreat: 'A rival has taken one of your points' },
+    help: `<b>Warlords.</b> ${n} warlords, each with a base, a Keep and the Roads off their harbour. Between neighbours lie a Pass on land and a Strait at sea, and in the middle the Citadel. You can capture a point next to one you hold (the lines on the map), and you can always retake your own two. Every point you hold scores; the Citadel scores five times as fast. Destroying people's vehicles and taking points scores too, and a warlord who has lost every point has an open headquarters: sack it for a big bonus. It is rebuilt a minute later. Most score when the clock runs out wins.<br>`,
+    names: {}
+  };
+}
 const THEATRES = { eu: EU_THEATRE, pac: PAC_THEATRE, mod: MOD_THEATRE };
+// the Warlords maps are made when asked for: warN with N warlords
+function warN(id) { const m = /^war([2-8])$/.exec(id || ''); return m ? +m[1] : 0; }
+function theatreOf(id) { return THEATRES[id] || (warN(id) ? warTheatre(warN(id)) : null); }
 
 // ---------------------------------------------------------------- custom maps (built in editor.html)
 // A custom map starts as a copy of one of the theatres above (its units, seasons and sides) with its own coastline,
@@ -453,17 +515,17 @@ function netMap(id) {
 // Without a browser (the game server) the theatre is set before this file loads: FRONTLINE_FRONT = 'eu' / 'pac' /
 // 'mod', or FRONTLINE_MAP = a custom map record from the map builder.
 if (typeof FRONTLINE_MAP !== 'undefined' && FRONTLINE_MAP && THEATRES[FRONTLINE_MAP.base]) { CUSTOM_MAP = FRONTLINE_MAP; THEATRE_ID = CUSTOM_MAP.base; }
-else if (typeof FRONTLINE_FRONT !== 'undefined' && THEATRES[FRONTLINE_FRONT]) THEATRE_ID = FRONTLINE_FRONT;
+else if (typeof FRONTLINE_FRONT !== 'undefined' && theatreOf(FRONTLINE_FRONT)) THEATRE_ID = FRONTLINE_FRONT;
 else try {
   const q = new URLSearchParams(location.search).get('front'), s = q || localStorage.getItem(FRONT_KEY);
   if (s && s.startsWith('map-')) CUSTOM_MAP = loadMaps().find(m => 'map-' + m.id === s) || netMap(s);
   if (CUSTOM_MAP) THEATRE_ID = CUSTOM_MAP.base;
-  else if (s && THEATRES[s]) THEATRE_ID = s;
-  if (q && (THEATRES[q] || CUSTOM_MAP)) localStorage.setItem(FRONT_KEY, q);
+  else if (s && theatreOf(s)) THEATRE_ID = s;
+  if (q && (theatreOf(q) || CUSTOM_MAP)) localStorage.setItem(FRONT_KEY, q);
 } catch (e) { }
-const TH = CUSTOM_MAP ? customTheatre(CUSTOM_MAP) : THEATRES[THEATRE_ID];
+const TH = CUSTOM_MAP ? customTheatre(CUSTOM_MAP) : theatreOf(THEATRE_ID);
 function switchTheatre(id) {
-  if (!THEATRES[id] && !(id.startsWith('map-') && loadMaps().some(m => 'map-' + m.id === id))) return;
+  if (!theatreOf(id) && !(id.startsWith('map-') && loadMaps().some(m => 'map-' + m.id === id))) return;
   try { localStorage.setItem(FRONT_KEY, id); } catch (e) { }
   const q = new URLSearchParams(location.search); q.delete('front'); q.set('front', id);
   location.replace(location.pathname + '?' + q.toString());
