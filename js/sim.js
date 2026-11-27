@@ -313,7 +313,7 @@ function warGoal(team, sea, from, seed) {
   for (const p of POINTS) {
     if (p.sea !== sea || p.owner === team || !canCap(p, team)) continue;
     let s = Math.hypot(p.x - from.x, p.z - from.z) / (p.cit ? 1.7 : 1) * (1 + ((seed * 7 + p.i * 13) % 10) / 9);
-    if (p.home === team) s *= 0.5;                        // our own Keep or Roads: take it back first
+    if (p.home === team) s *= 0.5;                        // our own Keep or Harbour: take it back first
     if (s < bs) { bs = s; best = p; }
   }
   return best;

@@ -414,7 +414,7 @@ const MOD_THEATRE = {
 
 // ---------------------------------------------------------------- Warlords: everyone for themselves
 // A round continent with each warlord's base on its coast, evenly spaced so nobody is closer to the middle than
-// anyone else. Every warlord starts with two points of their own (the Keep inland of their base and the Roads off
+// anyone else. Every warlord starts with two points of their own (the Keep inland of their base and the Harbour off
 // its harbour). Between each pair of neighbours there is a border point on land and one at sea, and in the middle
 // stands the Citadel: three points on a hill that score fastest of all. A point can be captured by whoever holds
 // one of the points listed in its `from` (and a warlord can always retake their own two). Built for n warlords
@@ -443,12 +443,12 @@ function warTheatre(n) {
     terrain.push(['forest', ...at(mid(t), 1150), 330], ['hill', ...at(mid(t), 2650), 260]);
     if (n <= 5) terrain.push(['forest', ...at(ang(t), 1150, 500), 220], ['forest', ...at(ang(t), 1150, -500), 220]);
   }
-  // capture points: 0..n-1 the Keeps, n..2n-1 the Roads, then the borders on land and at sea, then the Citadel
+  // capture points: 0..n-1 the Keeps, n..2n-1 the Harbours, then the borders on land and at sea, then the Citadel
   const keep = t => t, roads = t => n + t, bland = t => 2 * n + t, bsea = t => 3 * n + t, cit = i => 4 * n + i, pts = [];
   const prev = t => (t + n - 1) % n, next = t => (t + 1) % n;
   const cits = [0, 1, 2].map(cit), borders = [...Array(n).keys()].map(bland), keeps = [...Array(n).keys()].map(keep);
   for (let t = 0; t < n; t++) pts.push({ name: WAR_COLOURS[t] + ' Keep', p: at(ang(t), 1600), home: t, from: [bland(prev(t)), bland(t)] });
-  for (let t = 0; t < n; t++) pts.push({ name: WAR_COLOURS[t] + ' Roads', p: at(ang(t), 3420), sea: true, home: t, from: n > 2 ? [bsea(prev(t)), bsea(t)] : [bsea(0), bsea(1)] });
+  for (let t = 0; t < n; t++) pts.push({ name: WAR_COLOURS[t] + ' Harbour', p: at(ang(t), 3420), sea: true, home: t, from: n > 2 ? [bsea(prev(t)), bsea(t)] : [bsea(0), bsea(1)] });
   for (let t = 0; t < n; t++) pts.push({ name: n > 2 ? `${WAR_COLOURS[t]}-${WAR_COLOURS[next(t)]} Pass` : ['North Pass', 'South Pass'][t], p: at(mid(t), n > 2 ? 2000 : 1500), from: [keep(t), keep(next(t)), ...cits] });
   for (let t = 0; t < n; t++) pts.push({ name: n > 2 ? `${WAR_COLOURS[t]}-${WAR_COLOURS[next(t)]} Strait` : ['North Strait', 'South Strait'][t], p: at(mid(t), 3420), sea: true, from: n > 2 ? [roads(t), roads(next(t))] : [roads(0), roads(1)] });
   ['Citadel Gate', 'Citadel Tower', 'Citadel Hall'].forEach((name, i) => pts.push({ name, p: at(-Math.PI / 2 + i * 2 * Math.PI / 3, 430), cit: true, from: [...keeps, ...borders, ...cits.filter(c => c !== cit(i))] }));
@@ -467,7 +467,7 @@ function warTheatre(n) {
     sides: { adj: WAR_COLOURS.slice(0, n), pl: WAR_COLOURS.slice(0, n).map(c => c + ' army') },
     str: { goal: `Warlords: ${n} armies, everyone for themselves. Hold points to score; the three Citadel points in the middle score fastest. Whoever has the most points when the clock runs out wins. Pick your base or a point you hold on the map, then choose a vehicle.`,
       advance: 'Your banner flies over another point', retreat: 'A rival has taken one of your points' },
-    help: `<b>Warlords.</b> ${n} warlords, each with a base, a Keep and the Roads off their harbour. Between neighbours lie a Pass on land and a Strait at sea, and in the middle the Citadel. You can capture a point next to one you hold (the lines on the map), and you can always retake your own two. Every point you hold scores; the Citadel scores five times as fast. Destroying people's vehicles and taking points scores too, and a warlord who has lost every point has an open headquarters: sack it for a big bonus. It is rebuilt a minute later. Most score when the clock runs out wins.<br>`,
+    help: `<b>Warlords.</b> ${n} warlords, each with a base, a Keep inland and a Harbour point offshore. Between neighbours lie a Pass on land and a Strait at sea, and in the middle the Citadel. You can capture a point next to one you hold (the lines on the map), and you can always retake your own two. Every point you hold scores; the Citadel scores five times as fast. Destroying people's vehicles and taking points scores too, and a warlord who has lost every point has an open headquarters: sack it for a big bonus. It is rebuilt a minute later. Most score when the clock runs out wins.<br>`,
     names: {}
   };
 }
