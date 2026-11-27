@@ -4,41 +4,59 @@ One container that serves the game and runs multiplayer battles. Players open it
 **Play together** on the campaign menu, and either host a battle (they get a four-letter code to read out) or join
 one with a code. Everyone fights on the Allied side against the computer. Single player keeps working offline.
 
-## Run it
+## Where the image comes from
 
-From the repository root:
+Every push to `main` that changes the game or the server makes GitHub build the image and publish it as
+`ghcr.io/scottjahn/frontline1944:latest` (see `.github/workflows/server-image.yml`; it takes a few minutes and shows
+under the repository's **Actions** tab). The lab only needs the compose file, not the code.
+
+The first time it is published the package is **private**. Either make it public (GitHub → your profile →
+**Packages** → `frontline1944` → *Package settings* → *Change visibility*), or log the lab in once with a personal
+access token that has the `read:packages` scope:
 
 ```sh
-docker compose -f server/docker-compose.yml up -d --build
+echo <token> | docker login ghcr.io -u scottjahn --password-stdin
 ```
 
-The container listens on port **8080**. Check it with `curl http://<host>:8080/health`.
+## Run it next to Caddy
 
-## Put it behind your reverse proxy
+The compose file joins the container to Caddy's Docker network, so Caddy reaches it as `frontline1944:8080` and no
+port is opened on the host. Check the network name with `docker network ls` and set it in
+`server/docker-compose.yml` (it says `caddy`). Then:
 
-Give it a hostname, for example `frontline.goonlab.opik.net`, with a real TLS certificate. The proxy has to pass
-**WebSocket upgrades** through on the path `/ws`:
+```sh
+docker compose -f server/docker-compose.yml pull
+docker compose -f server/docker-compose.yml up -d
+```
 
-- **Traefik / Caddy**: WebSockets work with no extra settings.
-- **Nginx Proxy Manager**: tick *Websockets Support* on the proxy host.
-- **Plain nginx**:
-  ```nginx
-  location / {
-      proxy_pass http://frontline:8080;
-      proxy_http_version 1.1;
-      proxy_set_header Upgrade $http_upgrade;
-      proxy_set_header Connection "upgrade";
-      proxy_set_header Host $host;
-      proxy_read_timeout 1h;
-  }
-  ```
+In the Caddyfile:
 
-Players can then either:
+```caddy
+frontline.goonlab.opik.net {
+    reverse_proxy frontline1944:8080
+}
+```
 
-- **open `https://frontline.goonlab.opik.net`** (recommended): the game finds its server by itself, and the tablets can
-  add it to their home screen like the GitHub Pages version; or
-- **keep using the GitHub Pages copy**: type `frontline.goonlab.opik.net` once into *Game server* on the
-  *Play together* tab. This only works over `wss://` with a valid certificate, because the page itself is https.
+Caddy passes WebSocket connections (the game uses `/ws`) through on its own, and gets the TLS certificate itself as
+long as the name is in public DNS. The certificate must be one the tablets trust, so `tls internal` will not work.
+
+Players then open `https://frontline.goonlab.opik.net`, and the game finds its server by itself. The GitHub Pages
+copy works too: type `frontline.goonlab.opik.net` once into *Game server* on the *Play together* tab.
+
+## Updating
+
+Pull the new image and restart; rooms in progress end, so do it when nobody is playing:
+
+```sh
+docker compose -f server/docker-compose.yml pull && docker compose -f server/docker-compose.yml up -d
+```
+
+To do it automatically every night at 4 am, add this to the host's crontab (`crontab -e`), with the path to where
+the compose file is:
+
+```
+0 4 * * * cd /path/to/frontline && docker compose -f server/docker-compose.yml pull -q && docker compose -f server/docker-compose.yml up -d
+```
 
 ## Settings
 
@@ -49,11 +67,10 @@ Players can then either:
 
 A room closes two minutes after its last player leaves, or 90 seconds after its battle ends.
 
-## Without Docker
+## Building it yourself
 
-```sh
-cd server && npm install && node server.js
-```
+From the repository root: `docker build -f server/Dockerfile -t ghcr.io/scottjahn/frontline1944:latest .`
+Or without Docker: `cd server && npm install && node server.js` (listens on 8080).
 
 `tools/netcheck.js` connects two pretend players to a running server and checks they end up in the same battle:
 `node tools/netcheck.js ws://localhost:8080/ws`.
