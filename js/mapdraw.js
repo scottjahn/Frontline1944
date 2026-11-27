@@ -76,6 +76,81 @@ function maskRelief(c, spots) {
   }
   c.restore();
 }
+// ---- the same painters worked out on plain arrays instead of a canvas, so the battlefield can be built where there
+// is no browser (the game server). The game uses these for the terrain everywhere, so every machine gets the same map.
+// Each grid is w*h values; P and k work as above.
+// land: 1 where there is land, 0 for water
+function rasterLand(w, h, land, stamps, P, k) {
+  const out = new Uint8Array(w * h);
+  for (const poly of land) rasterPoly(out, w, h, poly.map(q => P(q[0], q[1])));
+  for (const s of stamps) {
+    if (s[0] !== 'land' && s[0] !== 'water') continue;
+    const p = P(s[1], s[2]), r = Math.max(0.6, s[3] * k), v = s[0] === 'land' ? 1 : 0;
+    rasterSpot(w, h, p[0], p[1], r, (i, t) => { out[i] = v; }, true);
+  }
+  return out;
+}
+// fill a polygon (non-zero winding, like a canvas), testing each pixel's centre
+function rasterPoly(out, w, h, pts) {
+  const n = pts.length, xs = []; let y0 = Infinity, y1 = -Infinity;
+  for (const p of pts) { if (p[1] < y0) y0 = p[1]; if (p[1] > y1) y1 = p[1]; }
+  for (let y = Math.max(0, Math.floor(y0)); y <= Math.min(h - 1, Math.ceil(y1)); y++) {
+    const cy = y + 0.5; xs.length = 0;
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
+      if ((a[1] <= cy) !== (b[1] <= cy)) xs.push([a[0] + (cy - a[1]) / (b[1] - a[1]) * (b[0] - a[0]), b[1] > a[1] ? 1 : -1]);
+    }
+    xs.sort((p, q) => p[0] - q[0]);
+    let wind = 0;
+    for (let i = 0; i < xs.length - 1; i++) {
+      wind += xs[i][1]; if (!wind) continue;
+      const xa = Math.max(0, Math.ceil(xs[i][0] - 0.5)), xb = Math.min(w - 1, Math.ceil(xs[i + 1][0] - 0.5) - 1);
+      for (let x = xa; x <= xb; x++) out[y * w + x] = 1;
+    }
+  }
+}
+// call fn(index, t) for each pixel whose centre is within r of (cx, cy); t = distance / r
+function rasterSpot(w, h, cx, cy, r, fn) {
+  const x0 = Math.max(0, Math.floor(cx - r)), x1 = Math.min(w - 1, Math.ceil(cx + r)), y0 = Math.max(0, Math.floor(cy - r)), y1 = Math.min(h - 1, Math.ceil(cy + r));
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+    const t = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / r; if (t <= 1) fn(y * w + x, t);
+  }
+}
+// the opacity of a radial gradient at t: stops are [t, alpha] pairs in order
+function rampAt(stops, t) {
+  for (let i = 1; i < stops.length; i++) if (t <= stops[i][0]) { const a = stops[i - 1], b = stops[i]; return a[1] + (b[1] - a[1]) * (t - a[0]) / (b[0] - a[0]); }
+  return stops[stops.length - 1][1];
+}
+const RAMP = {
+  mtn: [[0, 0.5], [0.45, 0.39], [0.8, 0.15], [1, 0]], hill: [[0, 0.45], [0.45, 0.351], [0.8, 0.135], [1, 0]],
+  forest: [[0, 0.6], [0.55, 0.5], [1, 0]], flat: [[0, 1], [0.6, 0.9], [1, 0]]
+};
+// relief: m = mountains, hl = hills, 0..255 like paintRelief's red and green, with maskRelief's flat spots applied
+function rasterRelief(w, h, stamps, P, k, spots) {
+  const m = new Float32Array(w * h), hl = new Float32Array(w * h);
+  for (const s of stamps) {
+    const kind = s[0]; if (kind !== 'mtn' && kind !== 'hill' && kind !== 'flat') continue;
+    const p = P(s[1], s[2]), r = Math.max(1, s[3] * k), ramp = RAMP[kind];
+    if (kind === 'flat') rasterSpot(w, h, p[0], p[1], r, (i, t) => { const a = 1 - rampAt(ramp, t); m[i] *= a; hl[i] *= a; });
+    else { const ch = kind === 'mtn' ? m : hl; rasterSpot(w, h, p[0], p[1], r, (i, t) => { ch[i] = Math.min(255, ch[i] + 255 * rampAt(ramp, t)); }); }
+  }
+  for (const s of spots) {
+    const ramp = [[0, 1], [s[2] / s[3], 1], [1, 0]];
+    rasterSpot(w, h, s[0], s[1], s[3], (i, t) => { const a = 1 - rampAt(ramp, t); m[i] *= a; hl[i] *= a; });
+  }
+  return { m, hl };
+}
+// woods: 0..255 like paintForest's red
+function rasterForest(w, h, stamps, P, k) {
+  const f = new Float32Array(w * h);
+  for (const s of stamps) {
+    const kind = s[0]; if (kind !== 'forest' && kind !== 'flat') continue;
+    const p = P(s[1], s[2]), r = Math.max(1, s[3] * k), ramp = RAMP[kind];
+    if (kind === 'flat') rasterSpot(w, h, p[0], p[1], r, (i, t) => { f[i] *= 1 - rampAt(ramp, t); });
+    else rasterSpot(w, h, p[0], p[1], r, (i, t) => { f[i] = Math.min(255, f[i] + 255 * rampAt(ramp, t)); });
+  }
+  return f;
+}
 // smooth value noise, 0..1, one bump per unit
 function vhash(i, j) { let n = Math.imul(i, 374761393) + Math.imul(j, 668265263) | 0; n = Math.imul(n ^ (n >>> 13), 1274126177); return ((n ^ (n >>> 16)) >>> 0) / 4294967296; }
 function vnoise(x, z) {

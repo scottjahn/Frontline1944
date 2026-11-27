@@ -446,7 +446,11 @@ function customTheatre(m) {
   });
 }
 let THEATRE_ID = 'eu', CUSTOM_MAP = null;
-try {
+// Without a browser (the game server) the theatre is set before this file loads: FRONTLINE_FRONT = 'eu' / 'pac' /
+// 'mod', or FRONTLINE_MAP = a custom map record from the map builder.
+if (typeof FRONTLINE_MAP !== 'undefined' && FRONTLINE_MAP && THEATRES[FRONTLINE_MAP.base]) { CUSTOM_MAP = FRONTLINE_MAP; THEATRE_ID = CUSTOM_MAP.base; }
+else if (typeof FRONTLINE_FRONT !== 'undefined' && THEATRES[FRONTLINE_FRONT]) THEATRE_ID = FRONTLINE_FRONT;
+else try {
   const q = new URLSearchParams(location.search).get('front'), s = q || localStorage.getItem(FRONT_KEY);
   if (s && s.startsWith('map-')) CUSTOM_MAP = loadMaps().find(m => 'map-' + m.id === s) || null;
   if (CUSTOM_MAP) THEATRE_ID = CUSTOM_MAP.base;
